@@ -3210,6 +3210,7 @@
             };
             
             const [inputDate, setInputDate] = useState(getTodayYMD());
+            const [leaveDays, setLeaveDays] = useState(1); // เพิ่ม State สำหรับจำนวนวันลา
             const [selectedStudentIds, setSelectedStudentIds] = useState([]);
             const [leaveType, setLeaveType] = useState('ลาป่วย');
             const [cart, setCart] = useState([]);
@@ -3244,23 +3245,41 @@
                 if (selectedStudentIds.length === 0) return alert('กรุณาเลือกนักเรียนอย่างน้อย 1 คน');
                 if (!inputDate) return alert('กรุณาเลือกวันที่');
                 if (!selectedClass || !selectedRoom) return alert('กรุณาเลือกชั้นและห้องเรียน');
+                if (leaveDays < 1) return alert('จำนวนวันลาต้องอย่างน้อย 1 วัน');
 
-                const formattedDate = formatDateForDB(inputDate);
-                const newCartItems = selectedStudentIds.map(code => {
-                    const stu = targetStudents.find(s => s.code === code);
-                    return {
-                        tempId: Date.now() + Math.random(),
-                        date: formattedDate,
-                        studentId: stu.code,
-                        name: stu.name,
-                        room: `${stu.classLevel}/${stu.room}`,
-                        leaveType: leaveType,
-                        recorder: (user && user.name) ? user.name : 'Admin'
-                    };
-                });
+                let newCartItems = [];
+                const baseDate = new Date(inputDate);
+
+                // วนลูปสร้างรายการตามจำนวนวันลาที่ระบุ
+                for (let i = 0; i < leaveDays; i++) {
+                    const currentLeaveDate = new Date(baseDate);
+                    currentLeaveDate.setDate(currentLeaveDate.getDate() + i);
+
+                    const yyyy = currentLeaveDate.getFullYear();
+                    const mm = String(currentLeaveDate.getMonth() + 1).padStart(2, '0');
+                    const dd = String(currentLeaveDate.getDate()).padStart(2, '0');
+                    const ymdStr = `${yyyy}-${mm}-${dd}`;
+
+                    const formattedDate = formatDateForDB(ymdStr);
+                    
+                    const dailyItems = selectedStudentIds.map(code => {
+                        const stu = targetStudents.find(s => s.code === code);
+                        return {
+                            tempId: Date.now() + Math.random() + i, // ทำให้ ID ไม่ซ้ำ
+                            date: formattedDate,
+                            studentId: stu.code,
+                            name: stu.name,
+                            room: `${stu.classLevel}/${stu.room}`,
+                            leaveType: leaveType,
+                            recorder: (user && user.name) ? user.name : 'Admin'
+                        };
+                    });
+                    newCartItems = [...newCartItems, ...dailyItems];
+                }
 
                 setCart(prev => [...prev, ...newCartItems]);
                 setSelectedStudentIds([]); 
+                setLeaveDays(1); // รีเซ็ตจำนวนวันกลับเป็น 1 วันอัตโนมัติ
             };
 
             const removeFromCart = (tempId) => {
@@ -3312,6 +3331,35 @@
                 return true; 
             });
 
+            // เพิ่มฟังก์ชันแก้ไขและลบ ที่หายไปกลับคืนมา
+            const saveEdit = async (e) => {
+                e.preventDefault();
+                setIsProcessing(true);
+                try {
+                    await callGAS('editLeaveRecord', { ...editingRecord, targetSheetId: TARGET_SHEET_ID });
+                    setRecords(records.map(r => r.id === editingRecord.id ? editingRecord : r));
+                    setEditingRecord(null);
+                    alert('แก้ไขข้อมูลสำเร็จ');
+                } catch(err) {
+                    alert("อัปเดตล้มเหลว: " + err.message);
+                }
+                setIsProcessing(false);
+            };
+
+            const handleDeleteConfirm = async () => {
+                if (!deletingRecordId) return;
+                setIsProcessing(true);
+                try {
+                    await callGAS('deleteLeaveRecord', { id: deletingRecordId, targetSheetId: TARGET_SHEET_ID });
+                    setRecords(records.filter(r => r.id !== deletingRecordId));
+                    setDeletingRecordId(null);
+                    alert('ลบข้อมูลสำเร็จ');
+                } catch(error) {
+                    alert('ลบล้มเหลว: ' + error.message);
+                }
+                setIsProcessing(false);
+            };
+
             return (
                 <div className="space-y-6">
                     <div className="bg-white p-6 rounded-xl shadow-sm border-t-4 border-teal-500 animate-[fadeIn_0.3s_ease-out]">
@@ -3345,8 +3393,18 @@
                         {selectedRoom ? (
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
                                 <div className="md:col-span-2 bg-blue-50 p-4 rounded-lg border border-blue-100">
-                                    <label className="block text-sm font-bold text-ns-blue mb-2">1. เลือกวันที่ และ นักเรียน</label>
-                                    <input type="date" value={inputDate} onChange={e=>setInputDate(e.target.value)} className="w-full md:w-1/2 border rounded-lg p-2 mb-4 focus:ring-2 focus:ring-ns-blue outline-none" />
+                                    <label className="block text-sm font-bold text-ns-blue mb-2">1. เลือกวันที่เริ่มลา, จำนวนวัน และ นักเรียน</label>
+                                    
+                                    <div className="flex flex-col md:flex-row gap-4 mb-4">
+                                        <div className="w-full md:w-1/2">
+                                            <label className="block text-xs text-gray-600 mb-1">วันที่เริ่มต้นลา</label>
+                                            <input type="date" value={inputDate} onChange={e=>setInputDate(e.target.value)} className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-ns-blue outline-none" />
+                                        </div>
+                                        <div className="w-full md:w-1/2">
+                                            <label className="block text-xs text-gray-600 mb-1">จำนวนวันลา (วัน)</label>
+                                            <input type="number" min="1" max="30" value={leaveDays} onChange={e=>setLeaveDays(Number(e.target.value))} className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-ns-blue outline-none font-bold text-ns-blue" />
+                                        </div>
+                                    </div>
                                     
                                     <div className="max-h-60 overflow-y-auto bg-white border rounded-lg p-2 shadow-inner">
                                         {targetStudents.length > 0 && (
