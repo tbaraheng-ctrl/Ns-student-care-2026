@@ -4570,8 +4570,8 @@
             );
         };
 
-       // 14. หน้าเช็คชื่อเข้าเรียน (AttendanceView)
-        const AttendanceView = ({ user, students, leaveRecords, periodSettings, behaviorsSetting, behaviorRecords, setBehaviorRecords, registrations, allSchedules, teachers = [] }) => {
+        // 14. หน้าเช็คชื่อเข้าเรียน (AttendanceView)
+        const AttendanceView = ({ user, students, leaveRecords, setLeaveRecords, periodSettings, behaviorsSetting, behaviorRecords, setBehaviorRecords, registrations, allSchedules, teachers = [] }) => {
             // เพิ่มการใช้งาน useRef (ถ้าในไฟล์หลักยังไม่ได้ import useRef ให้เพิ่มด้วยนะครับ)
             const React = window.React || require('react');
             const { useState, useEffect, useRef } = React;
@@ -4755,6 +4755,35 @@
                 const daysTH = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์'];
                 const d = new Date(dateString);
                 return daysTH[d.getDay()];
+            };
+
+            // เพิ่มฟังก์ชันจัดรูปแบบวันที่เพื่อป้องกันบัคเวลา/วันที่ไม่ตรงกัน (แก้ไข error formatDisplayDate is not defined)
+            const formatDisplayDate = (dateStr) => {
+                if (!dateStr) return '';
+                let str = String(dateStr).trim();
+                if (str.includes('T') || str.match(/^\d{4}-\d{2}-\d{2}/)) {
+                    try {
+                        const d = new Date(str);
+                        if (!isNaN(d.getTime())) {
+                            const day = String(d.getDate()).padStart(2, '0');
+                            const month = String(d.getMonth() + 1).padStart(2, '0');
+                            let year = d.getFullYear();
+                            if (year < 2500) year += 543;
+                            return `${day}/${month}/${year}`;
+                        }
+                    } catch(e) {}
+                }
+                if (str.includes('/')) {
+                    const parts = str.split('/');
+                    if (parts.length === 3) {
+                        const d = parts[0].padStart(2, '0');
+                        const m = parts[1].padStart(2, '0');
+                        let y = Number(parts[2]);
+                        if (y < 2500 && y > 1900) y += 543;
+                        return `${d}/${m}/${y}`;
+                    }
+                }
+                return str;
             };
 
             // อัปเดต NormalizeName ให้รองรับคำว่า "ผู้อำนวยการโรงเรียน"
@@ -5119,73 +5148,121 @@
                         }
                     });
                     
-                    // 2. จัดการคะแนนพฤติกรรม "หนีเรียน" (รองรับการแก้ไขข้อมูล)
+                    // 2. จัดการคะแนนพฤติกรรม "หนีเรียน" และ "แจ้งลา" อัตโนมัติ (ป้องกันซ้ำซ้อน)
                     const periodLabel = activePeriods.length > 1 ? `(คาบ ${activePeriods[0]}-${activePeriods[activePeriods.length-1]})` : `(คาบ ${activePeriods[0]})`;
                     const baseBehaviorNameMatch = `หนีเรียนวิชา${activeSubject.subjectName || ''} ${periodLabel}`;
 
-                    // 2.1 ค้นหาและลบประวัติ "หนีเรียน" เดิมของคาบนี้ออกก่อน (กรณีแก้สถานะจากหนีเรียน -> มา)
-                    const oldSkipRecords = (behaviorRecords || []).filter(r => 
-                        r.date === dbDate && 
-                        String(r.behaviorName || '').includes(baseBehaviorNameMatch) &&
-                        targetStudents.some(ts => ts.code === r.studentId)
-                    );
+                    let skipAddedCount = 0;
+                    let leaveAddedCount = 0;
 
-                    for (const oldRec of oldSkipRecords) {
-                        try {
-                            await callGAS('deleteBehaviorRecord', { id: oldRec.id, targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' });
-                            if (setBehaviorRecords) {
-                                setBehaviorRecords(prev => prev.filter(p => p.id !== oldRec.id));
-                            }
-                        } catch(e) { console.log("ลบประวัติหนีเรียนเดิมล้มเหลว:", e); }
-                    }
-
-                    // 2.2 ตรวจสอบและบันทึกพฤติกรรมอัตโนมัติ สำหรับคนที่ "หนีเรียน" (ข้อมูลใหม่)
-                    const skippers = recordsToSave.filter(r => r.status === 'หนีเรียน');
-                    for (const stu of skippers) {
+                    for (const stu of recordsToSave) {
                         const studentInfo = targetStudents.find(s => s.code === stu.studentId);
-                        if (!studentInfo) continue; 
-                        
-                        const pastSkips = (behaviorRecords || []).filter(r => 
-                            String(r.studentId).trim() === String(stu.studentId).trim() && 
-                            String(r.behaviorName || '').includes('หนีเรียน') &&
-                            !oldSkipRecords.some(old => old.id === r.id) // ไม่นับรวมอันที่เพิ่งลบไป
-                        );
-                        const skipCount = pastSkips.length + 1;
-                        
-                        let searchKeyword = `ครั้งที่ ${skipCount}`;
-                        if (skipCount > 3) searchKeyword = "เกิน 3 ครั้ง";
+                        if (!studentInfo) continue;
 
-                        let skipBehavior = (behaviorsSetting || []).find(b => String(b.name || '').includes('หนีเรียน') && String(b.name || '').includes(searchKeyword));
-                        
-                        if (!skipBehavior) {
-                            let defaultScore = -10;
-                            if (skipCount === 2) defaultScore = -15;
-                            if (skipCount >= 3) defaultScore = -20;
-                            
-                            skipBehavior = (behaviorsSetting || []).find(b => String(b.name || '').includes('หนีเรียน') && !String(b.name || '').includes('ครั้ง')) || 
-                                           { name: 'หนีเรียน', score: defaultScore, type: 'ลบ' };
+                        // 2.1 ตรวจสอบประวัติ "หนีเรียน" เดิมของคาบนี้ (อัปเดตการตรวจสอบให้แม่นยำขึ้น)
+                        const existingSkip = (behaviorRecords || []).find(r => 
+                            formatDisplayDate(r.date) === dbDate && 
+                            String(r.studentId).trim() === String(stu.studentId).trim() &&
+                            String(r.behaviorName || '').includes('หนีเรียน') &&
+                            String(r.behaviorName || '').includes(periodLabel)
+                        );
+
+                        if (stu.status === 'หนีเรียน') {
+                            // ถ้าสถานะเป็นหนีเรียน และยังไม่มีประวัติในคาบนี้ของวันนี้ -> บันทึกเพิ่ม
+                            if (!existingSkip) {
+                                const pastSkips = (behaviorRecords || []).filter(r => 
+                                    String(r.studentId).trim() === String(stu.studentId).trim() && 
+                                    String(r.behaviorName || '').includes('หนีเรียน')
+                                );
+                                const skipCount = pastSkips.length + 1;
+                                
+                                let searchKeyword = `ครั้งที่ ${skipCount}`;
+                                if (skipCount > 3) searchKeyword = "เกิน 3 ครั้ง";
+
+                                let skipBehavior = (behaviorsSetting || []).find(b => String(b.name || '').includes('หนีเรียน') && String(b.name || '').includes(searchKeyword));
+                                
+                                if (!skipBehavior) {
+                                    let defaultScore = -10;
+                                    if (skipCount === 2) defaultScore = -15;
+                                    if (skipCount >= 3) defaultScore = -20;
+                                    
+                                    skipBehavior = (behaviorsSetting || []).find(b => String(b.name || '').includes('หนีเรียน') && !String(b.name || '').includes('ครั้ง')) || 
+                                                   { name: 'หนีเรียน', score: defaultScore, type: 'ลบ' };
+                                }
+
+                                const deductScore = -Math.abs(Number(skipBehavior.score));
+                                const finalBehaviorName = `${baseBehaviorNameMatch} ${searchKeyword}`;
+
+                                const newBehaviorRecord = {
+                                    id: Date.now() + Math.floor(Math.random() * 1000),
+                                    date: dbDate,
+                                    studentId: studentInfo.code,
+                                    name: studentInfo.name,
+                                    room: `${studentInfo.classLevel}/${studentInfo.room}`,
+                                    behaviorName: finalBehaviorName,
+                                    score: deductScore,
+                                    recorder: user ? user.name : 'ระบบอัตโนมัติ',
+                                    type: 'ลบ'
+                                };
+
+                                callGAS('saveBehaviorRecord', { ...newBehaviorRecord, targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' }).catch(e => console.log("Auto skip behavior error:", e));
+                                
+                                if (setBehaviorRecords) {
+                                    setBehaviorRecords(prev => [newBehaviorRecord, ...(prev || [])]);
+                                }
+                                skipAddedCount++;
+                            }
+                        } else {
+                            // ถ้าไม่ได้หนีเรียนแล้ว แต่มีประวัติหนีเรียนของคาบนี้ค้างอยู่ (เกิดจากการแก้ไข) -> ให้ลบออก
+                            if (existingSkip) {
+                                callGAS('deleteBehaviorRecord', { id: existingSkip.id, targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' }).catch(e => console.log("Delete old skip error:", e));
+                                if (setBehaviorRecords) {
+                                    setBehaviorRecords(prev => prev.filter(p => p.id !== existingSkip.id));
+                                }
+                            }
                         }
 
-                        const deductScore = -Math.abs(Number(skipBehavior.score));
-                        const finalBehaviorName = `${baseBehaviorNameMatch} ${searchKeyword}`;
+                        // 2.2 จัดการการแจ้งลาอัตโนมัติ (ลาป่วย, ลากิจ, ไปกิจกรรม)
+                        const existingLeave = (leaveRecords || []).find(r => 
+                            formatDisplayDate(r.date) === dbDate && 
+                            String(r.studentId).trim() === String(stu.studentId).trim()
+                        );
 
-                        const newBehaviorRecord = {
-                            id: Date.now() + Math.floor(Math.random() * 1000),
-                            date: dbDate,
-                            studentId: studentInfo.code,
-                            name: studentInfo.name,
-                            room: `${studentInfo.classLevel}/${studentInfo.room}`,
-                            behaviorName: finalBehaviorName,
-                            score: deductScore,
-                            recorder: user ? user.name : 'ระบบอัตโนมัติ',
-                            type: 'ลบ'
-                        };
-
-                        callGAS('saveBehaviorRecord', { ...newBehaviorRecord, targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' })
-                            .catch(e => console.log("Auto behavior error for skip:", e));
-                        
-                        if (setBehaviorRecords) {
-                            setBehaviorRecords(prev => [newBehaviorRecord, ...(prev || [])]);
+                        if (['ลาป่วย', 'ลากิจ', 'ไปกิจกรรม'].includes(stu.status)) {
+                            // ถ้าในวันนี้ยังไม่มีการแจ้งลาคนนี้ หรือมีการแก้ไขประเภทการลา
+                            if (!existingLeave || existingLeave.leaveType !== stu.status) {
+                                if (existingLeave) {
+                                    const updatedLeaveRecord = { ...existingLeave, leaveType: stu.status };
+                                    callGAS('editLeaveRecord', { ...updatedLeaveRecord, targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' }).catch(e => console.log(e));
+                                    if (setLeaveRecords) {
+                                        setLeaveRecords(prev => prev.map(r => r.id === existingLeave.id ? updatedLeaveRecord : r));
+                                    }
+                                } else {
+                                    const newLeaveRecord = {
+                                        id: Date.now() + Math.floor(Math.random() * 1000) + 1,
+                                        date: dbDate,
+                                        studentId: studentInfo.code,
+                                        name: studentInfo.name,
+                                        room: `${studentInfo.classLevel}/${studentInfo.room}`,
+                                        leaveType: stu.status,
+                                        recorder: user ? user.name : 'ระบบอัตโนมัติ'
+                                    };
+                                    callGAS('saveLeaveRecord', { ...newLeaveRecord, targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' }).catch(e => console.log(e));
+                                    if (setLeaveRecords) {
+                                        setLeaveRecords(prev => [newLeaveRecord, ...(prev || [])]);
+                                    }
+                                    leaveAddedCount++;
+                                }
+                            }
+                        } else {
+                            // ถ้าไม่ได้ลาแล้ว แต่มีประวัติการลาค้างอยู่ (เกิดจากการแก้ไขสถานะกลับมาเป็น มา/สาย/ขาด/หนีเรียน) -> ให้ลบออกจากชีทแจ้งลา
+                            if (existingLeave) {
+                                callGAS('deleteLeaveRecord', { id: existingLeave.id, targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' })
+                                    .catch(e => { if(!String(e.message).includes('ไม่พบข้อมูล')) console.log("Delete old leave error:", e); });
+                                if (setLeaveRecords) {
+                                    setLeaveRecords(prev => prev.filter(p => p.id !== existingLeave.id));
+                                }
+                            }
                         }
                     }
 
@@ -5210,8 +5287,11 @@
                         ? `จำนวน ${activePeriods.length} คาบติดต่อกัน` 
                         : 'ข้อมูลถูกส่งเข้าสู่ฐานข้อมูลเรียบร้อยแล้ว';
                     
-                    if (skippers.length > 0) {
-                        alertMsg += `\n\n*ระบบได้ทำการหักคะแนนพฤติกรรม "หนีเรียน" อัตโนมัติจำนวน ${skippers.length} คน*`;
+                    if (skipAddedCount > 0) {
+                        alertMsg += `\n\n* หักคะแนนหนีเรียนอัตโนมัติ ${skipAddedCount} คน`;
+                    }
+                    if (leaveAddedCount > 0) {
+                        alertMsg += `\n* เพิ่มประวัติแจ้งลาอัตโนมัติ ${leaveAddedCount} คน`;
                     }
                     
                     setSavePopup({
@@ -5486,12 +5566,20 @@
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-gray-50 p-5 rounded-xl border border-gray-200 mb-6 shadow-inner">
                             <div>
                                 <label className="block text-sm font-bold text-gray-700 mb-2">1. วันที่เช็คชื่อ (วัน{getDayNameTH(currentDate)})</label>
-                                <input 
-                                    type="date" 
-                                    value={currentDate} 
-                                    onChange={(e) => setCurrentDate(e.target.value)}
-                                    className="w-full border-2 border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-ns-blue outline-none text-lg"
-                                />
+                                <div className="relative w-full">
+                                    <div className="w-full border-2 border-gray-300 rounded-lg p-3 bg-white text-lg flex justify-between items-center focus-within:ring-2 focus-within:border-ns-blue">
+                                        <span className="font-bold text-ns-blue">
+                                            {currentDate ? `${currentDate.split('-')[2]}/${currentDate.split('-')[1]}/${Number(currentDate.split('-')[0]) + 543}` : 'เลือกวันที่'}
+                                        </span>
+                                        <i className="fa-solid fa-calendar-days text-gray-400"></i>
+                                    </div>
+                                    <input 
+                                        type="date" 
+                                        value={currentDate} 
+                                        onChange={(e) => setCurrentDate(e.target.value)}
+                                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                                    />
+                                </div>
                             </div>
                             <div>
                                 <label className="block text-sm font-bold text-gray-700 mb-2">2. เลือกคาบเรียน (อิงตามเวลาปัจจุบัน)</label>
@@ -8518,7 +8606,7 @@
                     case 'register':
                         return <RegisterView user={user} students={globalStudents} teachers={globalTeachers} records={globalRegistrations} setRecords={setGlobalRegistrations} isSyncing={isSyncing} />;
                     case 'attendance':
-                        return <AttendanceView user={user} students={globalStudents} leaveRecords={globalLeaveRecords} periodSettings={globalPeriodSettings} behaviorsSetting={globalBehaviors} behaviorRecords={globalBehaviorRecords} setBehaviorRecords={setGlobalBehaviorRecords} registrations={globalRegistrations} allSchedules={globalSchedules} teachers={globalTeachers} />;
+                        return <AttendanceView user={user} students={globalStudents} leaveRecords={globalLeaveRecords} setLeaveRecords={setGlobalLeaveRecords} periodSettings={globalPeriodSettings} behaviorsSetting={globalBehaviors} behaviorRecords={globalBehaviorRecords} setBehaviorRecords={setGlobalBehaviorRecords} registrations={globalRegistrations} allSchedules={globalSchedules} teachers={globalTeachers} />;
                     case 'leave':
                         return <LeaveView students={globalStudents} teachers={globalTeachers} user={user} records={globalLeaveRecords} setRecords={setGlobalLeaveRecords} isSyncing={isSyncing} />;
                     case 'history':
