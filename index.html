@@ -70,6 +70,15 @@
             const formBody = new URLSearchParams();
             formBody.append('action', action);
             if (payload) {
+                // 👇 แนบสถานะสวิตช์ Line Notify ปัจจุบัน ส่งตรงไปบังคับหลังบ้านทุกครั้ง 👇
+                try {
+                    const savedLineSettings = localStorage.getItem('ns_line_notify');
+                    if (savedLineSettings) {
+                        payload.clientLineSettings = JSON.parse(savedLineSettings);
+                    }
+                } catch(e) {}
+                // 👆 ------------------------------------------------------- 👆
+                
                 formBody.append('payload', JSON.stringify(payload));
             }
 
@@ -6132,8 +6141,8 @@
             );
         };
 
-        // 10. หน้าตั้งค่าระบบ (Settings)
-        const SettingsView = ({ schoolConfig, setSchoolConfig, allMenus, rolePermissions, setRolePermissions, timeSettings, setTimeSettings, behaviors, setBehaviors, periodSettings, setPeriodSettings }) => {
+// // 10. หน้าตั้งค่าระบบ (Settings)
+        const SettingsView = ({ schoolConfig, setSchoolConfig, allMenus, rolePermissions, setRolePermissions, timeSettings, setTimeSettings, behaviors, setBehaviors, periodSettings, setPeriodSettings, lineNotifySettings, setLineNotifySettings }) => {
             const [newBehavior, setNewBehavior] = useState({ type: 'บวก', name: '', score: '' });
 
             const [activities, setActivities] = useState([
@@ -6149,6 +6158,17 @@
             
             // เพิ่ม State สำหรับตั้งค่าเมนูด่วนหน้าแรก
             const [quickRoleTarget, setQuickRoleTarget] = useState('user');
+
+            // --- เพิ่ม State สำหรับตั้งค่า Line Notify ---
+            const [draftLineNotify, setDraftLineNotify] = useState(lineNotifySettings || {
+                time_in_out: true,
+                attendance: true,
+                behavior: true,
+                leave: true,
+                activity: true,
+                exempt: true,
+                register: false
+            });
 
             const handleGetLocation = (onSuccess) => {
                 if (navigator.geolocation) {
@@ -6223,7 +6243,7 @@
                 });
             };
 
-            const [isSaving, setIsSaving] = useState(false);
+           const [isSaving, setIsSaving] = useState(false);
 
             const handleSaveAllSettings = async () => {
                 setIsSaving(true);
@@ -6237,11 +6257,16 @@
                         activities: activities,
                         rolePermissions: rolePermissions,
                         periodSettings: periodSettings, // เพิ่มการส่งข้อมูลคาบเรียนไปบันทึกด้วย
+                        lineNotifySettings: draftLineNotify, // ส่งข้อมูลตั้งค่า Line Notify ไปบันทึก
                         msRiskLimit: schoolConfig.msRiskLimit !== undefined ? schoolConfig.msRiskLimit : 3,
                         msRiskPercent: schoolConfig.msRiskPercent !== undefined ? schoolConfig.msRiskPercent : 80
                     };
                     
                     await callGAS('saveSettings', payload);
+                    
+                    // อัปเดตข้อมูล Line Notify กลับเข้า Global State ทันทีที่บันทึกสำเร็จ
+                    if (setLineNotifySettings) setLineNotifySettings(draftLineNotify);
+
                     alert('บันทึกการตั้งค่าลง Google Sheet สำเร็จ!');
                 } catch (error) {
                     console.error("Save Error:", error);
@@ -6267,6 +6292,7 @@
                             <option value="activities">5. รายการกิจกรรม</option>
                             <option value="periods">6. ตั้งค่าเวลาคาบเรียน (สำหรับเช็คชื่อ)</option>
                             <option value="quick_menus">7. กำหนดเมนูด่วน (หน้าแรก)</option>
+                            <option value="line_notify">8. กำหนดการแจ้งเตือน Line Notify</option>
                         </select>
                     </div>
 
@@ -6700,6 +6726,52 @@
                                         </label>
                                     );
                                 })}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* การตั้งค่าการแจ้งเตือน Line Notify */}
+                    {activeSettingTab === 'line_notify' && (
+                        <div className="bg-white p-6 rounded-xl shadow-sm border-t-4 border-green-500 animate-[fadeIn_0.3s_ease-out]">
+                            <h2 className="text-xl font-bold text-gray-800 mb-4"><i className="fa-brands fa-line mr-2 text-green-500 text-2xl"></i> กำหนดรายการแจ้งเตือนผ่าน Line Notify</h2>
+                            
+                            <div className="bg-green-50 p-5 rounded-lg border border-green-200 mb-4">
+                                <p className="text-sm text-green-800 mb-4">
+                                    <i className="fa-solid fa-circle-info mr-1"></i> เลือกรายการที่คุณต้องการให้ระบบส่งข้อความแจ้งเตือนไปยัง Line กลุ่ม (หรือ Line ส่วนตัว) เมื่อมีการบันทึกข้อมูล
+                                </p>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    {[
+                                        { id: 'time_in_out', label: 'เวลาเข้า-ออกโรงเรียน (หน้าสแกน)' },
+                                        { id: 'att_late', label: 'เช็คชื่อรายวิชา: แจ้งเมื่อ "มาสาย"' },
+                                        { id: 'att_absent', label: 'เช็คชื่อรายวิชา: แจ้งเมื่อ "ขาดเรียน"' },
+                                        { id: 'att_skip', label: 'เช็คชื่อรายวิชา: แจ้งเมื่อ "หนีเรียน"' },
+                                        { id: 'behav_pos', label: 'คะแนนพฤติกรรม: แจ้งเมื่อ "ด้านบวก (+)"' },
+                                        { id: 'behav_neg', label: 'คะแนนพฤติกรรม: แจ้งเมื่อ "ด้านลบ (-)"' },
+                                        { id: 'leave', label: 'แจ้งนักเรียนลา' },
+                                        { id: 'activity', label: 'บันทึกเข้าร่วมกิจกรรม' },
+                                        { id: 'exempt', label: 'บันทึกยกเว้นมาสาย' },
+                                        { id: 'register', label: 'ลงทะเบียนวิชา (บันทึก/แก้ไข)' }
+                                    ].map(item => (
+                                        <label key={item.id} className={`flex items-center justify-between p-4 border rounded-xl cursor-pointer transition-all shadow-sm ${draftLineNotify[item.id] ? 'bg-white border-green-400' : 'bg-gray-50 border-gray-200'}`}>
+                                            <div className="flex items-center space-x-3">
+                                                <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg ${draftLineNotify[item.id] ? 'bg-green-100 text-green-600' : 'bg-gray-200 text-gray-400'}`}>
+                                                    <i className={`fa-solid ${draftLineNotify[item.id] ? 'fa-bell' : 'fa-bell-slash'}`}></i>
+                                                </div>
+                                                <span className={`font-bold ${draftLineNotify[item.id] ? 'text-green-800' : 'text-gray-500'}`}>{item.label}</span>
+                                            </div>
+                                            <div className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${draftLineNotify[item.id] ? 'bg-green-500' : 'bg-gray-300'}`}>
+                                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${draftLineNotify[item.id] ? 'translate-x-6' : 'translate-x-1'}`} />
+                                                <input 
+                                                    type="checkbox" 
+                                                    className="sr-only"
+                                                    checked={draftLineNotify[item.id]}
+                                                    onChange={(e) => setDraftLineNotify({ ...draftLineNotify, [item.id]: e.target.checked })}
+                                                />
+                                            </div>
+                                        </label>
+                                    ))}
+                                </div>
                             </div>
                         </div>
                     )}
@@ -8648,6 +8720,14 @@
                 ];
             });
 
+            // --- เพิ่ม State สำหรับดึงการตั้งค่า Line Notify ข้ามหน้า (จุดที่หายไป) ---
+            const [globalLineNotifySettings, setGlobalLineNotifySettings] = useState(() => {
+                const saved = localStorage.getItem('ns_line_notify');
+                return saved ? JSON.parse(saved) : {
+                    time_in_out: true, attendance: true, behavior: true, leave: true, activity: true, exempt: true, register: false
+                };
+            });
+
             // เพิ่มเมนูแจ้งลา และ เช็คชื่อเข้าเรียน
             const allMenus = [
                 { id: 'home', icon: 'fa-home', label: 'หน้าแรก' },
@@ -8757,30 +8837,48 @@
             const [globalUsers, setGlobalUsers] = useState([]);
             const [globalTeachers, setGlobalTeachers] = useState([]);
 
+            // 👇 วางทับฟังก์ชัน normalizeTimeStr เดิมทั้งหมด 👇
             const normalizeTimeStr = (val) => {
                 if (!val) return '';
-                if (val instanceof Date) {
-                    if (val.getUTCFullYear() <= 1900) {
-                        let hrs = (val.getUTCHours() + 7) % 24;
-                        return `${String(hrs).padStart(2, '0')}:${String(val.getUTCMinutes()).padStart(2, '0')}`;
-                    }
-                    return `${String(val.getHours()).padStart(2, '0')}:${String(val.getMinutes()).padStart(2, '0')}`;
+                let strVal = String(val).trim();
+
+                // 1. ถ้ามาเป็นข้อความปกติ เช่น "06:30" หรือ "6:30:00"
+                const timeMatch = strVal.match(/^(\d{1,2}):(\d{2})/);
+                if (timeMatch) {
+                    return `${String(timeMatch[1]).padStart(2, '0')}:${timeMatch[2]}`;
                 }
-                if (typeof val === 'string' && val.includes('T')) {
-                    const d = new Date(val);
-                    if (!isNaN(d.getTime())) {
-                        if (d.getUTCFullYear() <= 1900) {
-                            let hrs = (d.getUTCHours() + 7) % 24;
-                            return `${String(hrs).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+
+                // 2. ถ้ารูปแบบส่งมาจากชีทเป็น ISO Date เช่น "1899-12-29T23:47:56.000Z"
+                // Google Sheets มีบัคเวลาเก่าไทย (ปี 1899 ใช้โซนเวลา +06:42:04) ทำให้เวลาหดไป 18 นาที
+                // เราต้องให้เบราว์เซอร์ช่วยแปลงกลับโดยใช้ Date Object ของ JavaScript
+                if (strVal.includes('T') && strVal.includes('Z')) {
+                    try {
+                        const d = new Date(strVal);
+                        if (!isNaN(d.getTime())) {
+                            return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
                         }
-                        return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+                    } catch(e) {}
+                }
+
+                // 3. กรณีบังเอิญชีทส่งมาเป็นเลขทศนิยมล้วนๆ (เช่น 0.27083 = 06:30)
+                if (typeof val === 'number') {
+                    const totalMins = Math.round(val * 24 * 60);
+                    const h = Math.floor(totalMins / 60) % 24;
+                    const m = totalMins % 60;
+                    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+                }
+
+                // 4. เผื่อหลุดมาเป็นรูปแบบอื่น
+                if (strVal.includes('T')) {
+                    const timePart = strVal.split('T')[1];
+                    if (timePart && timePart.length >= 5) {
+                        return timePart.substring(0, 5);
                     }
                 }
-                if (typeof val === 'string' && val.match(/^\d{2}:\d{2}/)) {
-                    return val.substring(0, 5);
-                }
-                return String(val);
+
+                return strVal;
             };
+            // 👆 -------------------------------------------------- 👆
 
             const fetchStudentsFromDirectSheet = async () => {
                 try {
@@ -8897,6 +8995,9 @@
                             }
                             if (data.settings.periodSettings) {
                                 setGlobalPeriodSettings(data.settings.periodSettings);
+                            }
+                            if (data.settings.lineNotifySettings) {
+                                setGlobalLineNotifySettings(data.settings.lineNotifySettings);
                             }
                             if (data.settings.msRiskLimit !== undefined || data.settings.msRiskPercent !== undefined) {
                                 setSchoolConfig(prev => ({
@@ -9018,7 +9119,7 @@
                             allSchedules={globalSchedules}
                         />;
                     case 'settings':
-                        return <SettingsView schoolConfig={schoolConfig} setSchoolConfig={setSchoolConfig} allMenus={allMenus} rolePermissions={rolePermissions} setRolePermissions={setRolePermissions} timeSettings={timeSettings} setTimeSettings={setTimeSettings} behaviors={globalBehaviors} setBehaviors={setGlobalBehaviors} periodSettings={globalPeriodSettings} setPeriodSettings={setGlobalPeriodSettings} />;
+                        return <SettingsView schoolConfig={schoolConfig} setSchoolConfig={setSchoolConfig} allMenus={allMenus} rolePermissions={rolePermissions} setRolePermissions={setRolePermissions} timeSettings={timeSettings} setTimeSettings={setTimeSettings} behaviors={globalBehaviors} setBehaviors={setGlobalBehaviors} periodSettings={globalPeriodSettings} setPeriodSettings={setGlobalPeriodSettings} lineNotifySettings={globalLineNotifySettings} setLineNotifySettings={setGlobalLineNotifySettings} />;
                     default:
                         // --- หน้าแรก Dashboard แบบใหม่ที่มีเมนูด่วน ---
                         const userRole = user.role || 'user';
