@@ -63,7 +63,7 @@
         const { useState, useEffect, useRef } = React;
 
         // --- ตั้งค่าระบบ (Configurations) ---
-        const GAS_URL = "https://script.google.com/macros/s/AKfycbyUaD6KwcXhva82wUtEB8QuDcPueB7ck9PMtwtkEJnjLg6-CIwpsBSw2xXNMQOmH5J3/exec";
+        const GAS_URL = "https://script.google.com/macros/s/AKfycbzys4pTboqlekdZCWizoMQCPuHxpBuS05nRhw1S94VQbovSacq_4Z67Ryr8ogUEq2gf/exec";
         
         // --- ระบบสื่อสารกับ Google App Script (เปลี่ยนเป็น POST แบบฟอร์มมาตรฐาน) ---
         const callGAS = async (action, payload) => {
@@ -420,7 +420,14 @@
                         try {
                             setTimeout(() => {
                                 const studentExemption = (exemptions || []).find(ex => String(ex.studentId).trim() === decodedClean);
-                                const isExempted = studentExemption && scanIsLate && currentType === "เข้า";
+                                let isExempted = false;
+                                if (studentExemption && scanIsLate && currentType === "เข้า") {
+                                    isExempted = true; // ให้ยกเว้นไว้ก่อน
+                                    // แต่ถ้ามีกำหนดเวลา และเวลาที่สแกน "เกิน" เวลาที่อนุญาต ถือว่าสายตามปกติ
+                                    if (studentExemption.allowedLateTime && scanTimeStr > studentExemption.allowedLateTime) {
+                                        isExempted = false; 
+                                    }
+                                }
                                 const finalStatusStr = isExempted ? "ยกเว้นสาย" : (scanIsLate ? "สาย" : "ปกติ");
 
                                 const newRecord = {
@@ -752,7 +759,13 @@
                 const currentType = isOutMode ? "ออก" : "เข้า";
 
                 const studentExemption = (exemptions || []).find(ex => String(ex.studentId).trim() === String(studentToSave.code).trim());
-                const isExempted = studentExemption && scanIsLate && currentType === "เข้า";
+                let isExempted = false;
+                if (studentExemption && scanIsLate && currentType === "เข้า") {
+                    isExempted = true;
+                    if (studentExemption.allowedLateTime && scanTimeStr > studentExemption.allowedLateTime) {
+                        isExempted = false;
+                    }
+                }
                 const finalStatusStr = isExempted ? "ยกเว้นสาย" : (scanIsLate ? "สาย" : "ปกติ");
 
                 const isDuplicate = records.some(r => String(r.studentId).trim() === String(studentToSave.code).trim() && r.date === scanDateStr && r.type === currentType);
@@ -2170,34 +2183,45 @@
             const [selectedRoom, setSelectedRoom] = useState('');
             const [showScannerPopup, setShowScannerPopup] = useState(false);
 
-            const uniqueClasses = [...new Set(students.map(s => s.classLevel).filter(Boolean))].sort();
-            const uniqueRooms = [...new Set(students.filter(s => s.classLevel === selectedClass).map(s => s.room).filter(Boolean))].sort((a,b) => Number(a) - Number(b));
+            // ตัวแปรสำหรับตัวกรองพฤติกรรม
+            const [filterBehavior, setFilterBehavior] = useState(''); 
+            const uniqueBehaviors = [...new Set((behaviorRecords || []).map(b => b.behaviorName).filter(Boolean))].sort();
 
+            const uniqueClasses = [...new Set((students || []).map(s => s.classLevel).filter(Boolean))].sort();
+            const uniqueRooms = [...new Set((students || []).filter(s => s.classLevel === selectedClass).map(s => s.room).filter(Boolean))].sort((a,b) => Number(a) - Number(b));
+
+            // ฟังก์ชันกรองข้อมูลที่รองรับตัวกรองพฤติกรรม
             const getFilteredRecords = () => {
                 let baseRecords = [];
-                if (recordType === 'time') baseRecords = timeRecords;
-                else if (recordType === 'behavior') baseRecords = behaviorRecords;
-                else if (recordType === 'activity') baseRecords = activityRecords;
+                if (recordType === 'time') baseRecords = timeRecords || [];
+                else if (recordType === 'behavior') baseRecords = behaviorRecords || [];
+                else if (recordType === 'activity') baseRecords = activityRecords || [];
 
                 return baseRecords.filter(r => {
                     let match = true;
                     if (searchMethod === 'id' && searchId) {
                         match = String(r.studentId).trim() === String(searchId).trim();
                     } else if (searchMethod === 'class' && selectedClass) {
-                        const stu = students.find(s => String(s.code).trim() === String(r.studentId).trim());
+                        const stu = (students || []).find(s => String(s.code).trim() === String(r.studentId).trim());
                         if (stu) {
                             match = stu.classLevel === selectedClass && (selectedRoom ? stu.room === selectedRoom : true);
                         } else {
                             match = false; 
                         }
                     }
+                    
+                    // เงื่อนไข: กรองตามรายการพฤติกรรม (ถ้าผู้ใช้เลือก)
+                    if (match && recordType === 'behavior' && filterBehavior) {
+                        match = String(r.behaviorName).trim() === String(filterBehavior).trim();
+                    }
+                    
                     return match;
                 });
             };
 
             const filteredRecords = getFilteredRecords();
 
-            // ฟังก์ชันจัดรูปแบบวันที่ให้เป็น DD/MM/YYYY (พ.ศ.) ป้องกันปี 3112
+            // ฟังก์ชันจัดรูปแบบวันที่ให้เป็น DD/MM/YYYY (พ.ศ.)
             const formatDisplayDate = (dateStr) => {
                 if (!dateStr) return '';
                 let str = String(dateStr).trim();
@@ -2233,14 +2257,13 @@
                 try {
                     const d = new Date(timeStr);
                     if (isNaN(d.getTime())) return timeStr;
-                    // บังคับใช้โซนเวลาไทย เพื่อป้องกันเวลาคลาดเคลื่อนจาก Timezone (UTC)
                     return d.toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit' });
                 } catch(e) { return timeStr; }
             };
 
             const getRemainingScore = (studentId, currentRecordId) => {
                 const baseScore = (schoolConfig && schoolConfig.maxBehaviorScore) ? Number(schoolConfig.maxBehaviorScore) : 100;
-                const studentRecords = behaviorRecords.filter(r => String(r.studentId).trim() === String(studentId).trim() && r.id <= currentRecordId);
+                const studentRecords = (behaviorRecords || []).filter(r => String(r.studentId).trim() === String(studentId).trim() && r.id <= currentRecordId);
                 const totalDeduction = studentRecords.reduce((sum, r) => sum + Number(r.score), 0);
                 return baseScore + totalDeduction;
             };
@@ -2313,13 +2336,26 @@
                     <div className="bg-white p-6 rounded-xl shadow-sm border-t-4 border-gray-600 no-print">
                         <h2 className="text-xl font-bold text-gray-800 mb-4"><i className="fa-solid fa-filter text-gray-600 mr-2"></i> ตัวกรองข้อมูลประวัติ</h2>
                         
-                        <div className="mb-4">
-                            <label className="block text-sm font-bold text-gray-700 mb-2">เลือกรายการที่ต้องการตรวจสอบ:</label>
-                            <select value={recordType} onChange={e => setRecordType(e.target.value)} className="w-full md:w-1/2 border rounded-lg p-2 focus:ring-2 focus:ring-ns-blue outline-none bg-gray-50">
-                                <option value="time">เวลาเข้า-ออกโรงเรียน</option>
-                                <option value="behavior">คะแนนพฤติกรรมนักเรียน</option>
-                                <option value="activity">การเข้าร่วมกิจกรรม</option>
-                            </select>
+                        <div className="mb-4 flex flex-col md:flex-row gap-4">
+                            <div className="w-full md:w-1/2">
+                                <label className="block text-sm font-bold text-gray-700 mb-2">เลือกรายการที่ต้องการตรวจสอบ:</label>
+                                <select value={recordType} onChange={e => { setRecordType(e.target.value); setFilterBehavior(''); }} className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-ns-blue outline-none bg-gray-50">
+                                    <option value="time">เวลาเข้า-ออกโรงเรียน</option>
+                                    <option value="behavior">คะแนนพฤติกรรมนักเรียน</option>
+                                    <option value="activity">การเข้าร่วมกิจกรรม</option>
+                                </select>
+                            </div>
+                            
+                            {/* แสดงตัวกรองพฤติกรรมเฉพาะเมื่อเลือกดูคะแนนพฤติกรรม */}
+                            {recordType === 'behavior' && (
+                                <div className="w-full md:w-1/2 animate-[fadeIn_0.3s_ease-out]">
+                                    <label className="block text-sm font-bold text-gray-700 mb-2">กรองตามรายการพฤติกรรม:</label>
+                                    <select value={filterBehavior} onChange={e => setFilterBehavior(e.target.value)} className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-ns-blue outline-none bg-white">
+                                        <option value="">-- ดูทุกรายการพฤติกรรม --</option>
+                                        {uniqueBehaviors.map((b, i) => <option key={i} value={b}>{b}</option>)}
+                                    </select>
+                                </div>
+                            )}
                         </div>
 
                         <div className="flex space-x-4 mb-4 border-b pb-2">
@@ -5859,6 +5895,7 @@
             
             const [reason, setReason] = useState('');
             const [documentRef, setDocumentRef] = useState('');
+            const [allowedLateTime, setAllowedLateTime] = useState('08:30'); // เพิ่ม State เวลาที่อนุญาต
             
             const [isProcessing, setIsProcessing] = useState(false);
             const [editingRecord, setEditingRecord] = useState(null);
@@ -5887,6 +5924,7 @@
                     room: `${selectedStudent.classLevel}/${selectedStudent.room}`,
                     reason: reason,
                     documentRef: documentRef,
+                    allowedLateTime: allowedLateTime, // เพิ่มข้อมูลเวลาที่อนุญาต
                     recorder: user ? user.name : 'Admin'
                 };
 
@@ -5897,6 +5935,7 @@
                     setSelectedStudent(null);
                     setReason('');
                     setDocumentRef('');
+                    setAllowedLateTime('08:30');
                 } catch (error) {
                     alert('บันทึกข้อมูลล้มเหลว: ' + error.message);
                 }
@@ -5981,9 +6020,15 @@
                                         <label className="block text-sm font-bold text-gray-700 mb-1">สาเหตุที่ได้รับการยกเว้น <span className="text-red-500">*</span></label>
                                         <input type="text" value={reason} onChange={e=>setReason(e.target.value)} placeholder="เช่น ช่วยงานจราจร, เป็นนักกีฬาโรงเรียน ฯลฯ" className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-ns-blue outline-none" required />
                                     </div>
-                                    <div>
-                                        <label className="block text-sm font-bold text-gray-700 mb-1">เอกสารรับรอง / อ้างอิง (ถ้ามี)</label>
-                                        <input type="text" value={documentRef} onChange={e=>setDocumentRef(e.target.value)} placeholder="เช่น หนังสือขออนุญาตเลขที่..." className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-ns-blue outline-none" />
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-sm font-bold text-gray-700 mb-1">อนุญาตให้มาสายได้ไม่เกินเวลา <span className="text-red-500">*</span></label>
+                                            <input type="time" value={allowedLateTime} onChange={e=>setAllowedLateTime(e.target.value)} className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-ns-blue outline-none font-bold text-ns-blue" required />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-bold text-gray-700 mb-1">เอกสารรับรอง / อ้างอิง (ถ้ามี)</label>
+                                            <input type="text" value={documentRef} onChange={e=>setDocumentRef(e.target.value)} placeholder="เช่น หนังสือขออนุญาต..." className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-ns-blue outline-none" />
+                                        </div>
                                     </div>
                                     <div className="text-right pt-2">
                                         <button type="submit" disabled={isProcessing} className="bg-ns-blue text-white px-8 py-2 rounded-lg shadow hover:bg-blue-800 font-bold transition disabled:opacity-50">
@@ -6009,6 +6054,7 @@
                                         <th className="p-3 border-b">รหัสประจำตัว</th>
                                         <th className="p-3 border-b">ชื่อ-สกุล</th>
                                         <th className="p-3 text-center border-b">ชั้น/ห้อง</th>
+                                        <th className="p-3 border-b text-center">อนุญาตถึงเวลา</th>
                                         <th className="p-3 border-b">สาเหตุ</th>
                                         <th className="p-3 border-b">อ้างอิงเอกสาร</th>
                                         <th className="p-3 text-center border-b">ผู้บันทึก</th>
@@ -6022,6 +6068,7 @@
                                             <td className="p-3 font-medium">{r.studentId}</td>
                                             <td className="p-3 font-bold text-gray-800">{r.name}</td>
                                             <td className="p-3 text-center">{r.room}</td>
+                                            <td className="p-3 text-center font-bold text-orange-600">{r.allowedLateTime ? `${r.allowedLateTime} น.` : '-'}</td>
                                             <td className="p-3 text-blue-600">{r.reason}</td>
                                             <td className="p-3 text-gray-500">{r.documentRef || '-'}</td>
                                             <td className="p-3 text-center text-gray-500 text-xs">{r.recorder}</td>
@@ -6048,9 +6095,15 @@
                                         <label className="block text-sm text-gray-600 mb-1">สาเหตุ</label>
                                         <input type="text" value={editingRecord.reason} onChange={e=>setEditingRecord({...editingRecord, reason: e.target.value})} className="w-full border rounded p-2 focus:ring-2 focus:ring-ns-blue outline-none" required />
                                     </div>
-                                    <div>
-                                        <label className="block text-sm text-gray-600 mb-1">เอกสารอ้างอิง</label>
-                                        <input type="text" value={editingRecord.documentRef} onChange={e=>setEditingRecord({...editingRecord, documentRef: e.target.value})} className="w-full border rounded p-2 focus:ring-2 focus:ring-ns-blue outline-none" />
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-sm text-gray-600 mb-1">อนุญาตให้มาสายได้ถึงเวลา</label>
+                                            <input type="time" value={editingRecord.allowedLateTime || ''} onChange={e=>setEditingRecord({...editingRecord, allowedLateTime: e.target.value})} className="w-full border rounded p-2 focus:ring-2 focus:ring-ns-blue outline-none font-bold text-ns-blue" required />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm text-gray-600 mb-1">เอกสารอ้างอิง</label>
+                                            <input type="text" value={editingRecord.documentRef} onChange={e=>setEditingRecord({...editingRecord, documentRef: e.target.value})} className="w-full border rounded p-2 focus:ring-2 focus:ring-ns-blue outline-none" />
+                                        </div>
                                     </div>
                                     <div className="flex justify-end space-x-3 mt-6 pt-4 border-t">
                                         <button type="button" onClick={() => setEditingRecord(null)} className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300">ยกเลิก</button>
@@ -6678,6 +6731,7 @@
             const [roomFilter, setRoomFilter] = useState('');
             const [activityFilter, setActivityFilter] = useState('');
             const [evalFilter, setEvalFilter] = useState('all');
+            const [behaviorFilter, setBehaviorFilter] = useState(''); // เพิ่ม State สำหรับกรองรายการพฤติกรรม
 
             // --- เพิ่ม State สำหรับรายงาน แนวโน้ม ม.ส. / สถิติขาด-หนี / จัดอันดับ ---
             const [msRiskData, setMsRiskData] = useState([]);
@@ -6912,8 +6966,14 @@
                 }
             }
 
+            // ดึงรายการพฤติกรรมที่ไม่ซ้ำกันมาทำเป็นตัวกรอง
+            const uniqueBehaviorsForReport = [...new Set((behaviorRecords || []).map(b => b.behaviorName).filter(Boolean))].sort();
+
             // ประมวลผลข้อมูล Behavior
             const behaviorReportData = validBehaviorRecords.filter(r => {
+                // เพิ่มเงื่อนไข กรองตามรายการพฤติกรรมที่เลือก
+                if (behaviorFilter && String(r.behaviorName).trim() !== String(behaviorFilter).trim()) return false;
+                
                 if(classFilter) {
                     const stu = (students || []).find(s => String(s.code).trim() === String(r.studentId).trim());
                     if(!stu || stu.classLevel !== classFilter) return false;
@@ -7606,7 +7666,7 @@
                     <div className="bg-white rounded-xl shadow-sm overflow-hidden no-print">
                         <div className="p-4 bg-gray-50 border-b flex flex-wrap items-center">
                             <label className="font-bold text-gray-700 mr-3 w-full md:w-auto mb-2 md:mb-0">เลือกประเภทรายงาน:</label>
-                            <select value={activeTab} onChange={(e) => setActiveTab(e.target.value)} className="border rounded-lg p-2 focus:ring-2 focus:ring-ns-blue outline-none text-sm font-bold text-ns-blue w-full md:w-auto">
+                            <select value={activeTab} onChange={(e) => { setActiveTab(e.target.value); setBehaviorFilter(''); setActivityFilter(''); }} className="border rounded-lg p-2 focus:ring-2 focus:ring-ns-blue outline-none text-sm font-bold text-ns-blue w-full md:w-auto">
                                 {tabs.map(t => (
                                     <option key={t.id} value={t.id}>{t.label}</option>
                                 ))}
@@ -7687,6 +7747,17 @@
                                                     <option value="skip_desc">หนีเรียน (มากไปน้อย)</option>
                                                     <option value="neg_desc">หักคะแนนพฤติกรรม (มากไปน้อย)</option>
                                                     <option value="pos_desc">เพิ่มคะแนนพฤติกรรม (มากไปน้อย)</option>
+                                                </select>
+                                            </div>
+                                        )}
+
+                                        {/* เพิ่มตัวกรอง รายการพฤติกรรม */}
+                                        {activeTab === 'behavior' && (
+                                            <div className="animate-[fadeIn_0.3s_ease-out]">
+                                                <label className="block text-sm text-gray-600 mb-1">รายการพฤติกรรม</label>
+                                                <select value={behaviorFilter} onChange={e=>setBehaviorFilter(e.target.value)} className="border rounded p-2 text-sm bg-orange-50 focus:ring-2 focus:ring-ns-blue outline-none max-w-[200px] md:max-w-[250px] truncate">
+                                                    <option value="">-- ดูทุกรายการพฤติกรรม --</option>
+                                                    {uniqueBehaviorsForReport.map((b, idx) => <option key={idx} value={b}>{b}</option>)}
                                                 </select>
                                             </div>
                                         )}
@@ -8055,183 +8126,494 @@
                         {/* --- 2. แท็บใหม่: รายงานสถิติการขาดเรียนและหนีเรียน --- */}
                         {activeTab === 'absent_stats' && (
                             <div className="overflow-x-auto">
-                                {(()=>{
-                                    const roomStats = {};
-                                    let maxChartVal = 0;
-                                    combinedStatsData.forEach(stu => {
-                                        if (stu.absent > 0 || stu.skip > 0) {
-                                            const rKey = `${stu.classLevel || '?'}/${stu.room || '?'}`;
-                                            if (!roomStats[rKey]) roomStats[rKey] = { room: rKey, absent: 0, skip: 0, stuCount: 0 };
-                                            roomStats[rKey].absent += stu.absent;
-                                            roomStats[rKey].skip += stu.skip;
-                                            roomStats[rKey].stuCount += 1;
-                                        }
-                                    });
-                                    Object.values(roomStats).forEach(stat => {
-                                        const total = stat.absent + stat.skip;
-                                        if (total > maxChartVal) maxChartVal = total;
-                                    });
-                                    // เรียงลำดับตามระดับชั้นและห้องจากน้อยไปมาก
-                                    const roomStatsArray = Object.values(roomStats).sort((a,b) => {
-                                        const matchA = a.room.match(/ม\.(\d+)\/(\d+)/);
-                                        const matchB = b.room.match(/ม\.(\d+)\/(\d+)/);
-                                        if (matchA && matchB) {
-                                            if (matchA[1] !== matchB[1]) return Number(matchA[1]) - Number(matchB[1]);
-                                            return Number(matchA[2]) - Number(matchB[2]);
-                                        }
-                                        return a.room.localeCompare(b.room);
-                                    });
+                                {classFilter && roomFilter ? (
+                                    (()=>{
+                                        const roomStats = {};
+                                        let maxChartVal = 0;
+                                        combinedStatsData.forEach(stu => {
+                                            if (stu.absent > 0 || stu.skip > 0) {
+                                                const rKey = `${stu.classLevel || '?'}/${stu.room || '?'}`;
+                                                if (!roomStats[rKey]) roomStats[rKey] = { room: rKey, absent: 0, skip: 0, stuCount: 0 };
+                                                roomStats[rKey].absent += stu.absent;
+                                                roomStats[rKey].skip += stu.skip;
+                                                roomStats[rKey].stuCount += 1;
+                                            }
+                                        });
+                                        Object.values(roomStats).forEach(stat => {
+                                            const total = stat.absent + stat.skip;
+                                            if (total > maxChartVal) maxChartVal = total;
+                                        });
+                                        // เรียงลำดับตามระดับชั้นและห้องจากน้อยไปมาก
+                                        const roomStatsArray = Object.values(roomStats).sort((a,b) => {
+                                            const matchA = a.room.match(/ม\.(\d+)\/(\d+)/);
+                                            const matchB = b.room.match(/ม\.(\d+)\/(\d+)/);
+                                            if (matchA && matchB) {
+                                                if (matchA[1] !== matchB[1]) return Number(matchA[1]) - Number(matchB[1]);
+                                                return Number(matchA[2]) - Number(matchB[2]);
+                                            }
+                                            return a.room.localeCompare(b.room);
+                                        });
 
-                                    // คำนวณเปอร์เซ็นต์นักเรียนที่มีประวัติ
-                                    const totalStudents = combinedStatsData.length;
-                                    const totalAbsentStudents = combinedStatsData.filter(s => s.absent > 0).length;
-                                    const totalSkipStudents = combinedStatsData.filter(s => s.skip > 0).length;
-                                    const absentPercent = totalStudents > 0 ? ((totalAbsentStudents / totalStudents) * 100).toFixed(2) : 0;
-                                    const skipPercent = totalStudents > 0 ? ((totalSkipStudents / totalStudents) * 100).toFixed(2) : 0;
+                                        // คำนวณเปอร์เซ็นต์นักเรียนที่มีประวัติ
+                                        const totalStudents = combinedStatsData.length;
+                                        const totalAbsentStudents = combinedStatsData.filter(s => s.absent > 0).length;
+                                        const totalSkipStudents = combinedStatsData.filter(s => s.skip > 0).length;
+                                        const absentPercent = totalStudents > 0 ? ((totalAbsentStudents / totalStudents) * 100).toFixed(2) : 0;
+                                        const skipPercent = totalStudents > 0 ? ((totalSkipStudents / totalStudents) * 100).toFixed(2) : 0;
 
-                                    return (
-                                    <React.Fragment>
-                                        <div className="mb-4 bg-orange-50 border border-orange-200 p-4 rounded-lg print:bg-transparent print:border-none print:p-0 flex justify-between items-center">
-                                            <div>
-                                                <h3 className="font-bold text-orange-800 text-lg text-left"><i className="fa-solid fa-chart-line mr-2"></i> สรุปสถิติการขาดเรียนและหนีเรียน (แยกตามห้อง)</h3>
-                                                <p className="text-sm text-orange-700 mt-1 text-left">
-                                                    สรุปยอดรวมจำนวนคาบที่ขาดและหนีเรียนของนักเรียน <strong>{(classFilter && roomFilter) ? `ชั้น ${classFilter}/${roomFilter}` : 'ทุกชั้นเรียน'}</strong>
-                                                </p>
+                                        return (
+                                        <React.Fragment>
+                                            <div className="mb-4 bg-orange-50 border border-orange-200 p-4 rounded-lg print:bg-transparent print:border-none print:p-0 flex justify-between items-center">
+                                                <div>
+                                                    <h3 className="font-bold text-orange-800 text-lg text-left"><i className="fa-solid fa-chart-line mr-2"></i> สรุปสถิติการขาดเรียนและหนีเรียน (แยกตามห้อง)</h3>
+                                                    <p className="text-sm text-orange-700 mt-1 text-left">
+                                                        สรุปยอดรวมจำนวนคาบที่ขาดและหนีเรียนของนักเรียน <strong>{(classFilter && roomFilter) ? `ชั้น ${classFilter}/${roomFilter}` : 'ทุกชั้นเรียน'}</strong>
+                                                    </p>
+                                                </div>
+                                                {(classFilter && roomFilter) && (
+                                                    <div className="text-right text-sm text-gray-600">
+                                                        <strong>ครูที่ปรึกษา:</strong> {getAdvisorName(`${classFilter}/${roomFilter}`)}
+                                                    </div>
+                                                )}
                                             </div>
-                                            {(classFilter && roomFilter) && (
-                                                <div className="text-right text-sm text-gray-600">
-                                                    <strong>ครูที่ปรึกษา:</strong> {getAdvisorName(`${classFilter}/${roomFilter}`)}
+                                            
+                                            <table className="w-full text-sm text-left border-collapse border border-gray-300 mb-8">
+                                                <thead className="bg-gray-100 text-gray-800">
+                                                    <tr>
+                                                        <th className="p-3 border border-gray-300 text-center">ลำดับ</th>
+                                                        <th className="p-3 border border-gray-300 text-center">ระดับชั้น/ห้อง</th>
+                                                        <th className="p-3 border border-gray-300 text-center text-red-600">จำนวนนักเรียนที่มีประวัติ (คน)</th>
+                                                        <th className="p-3 border border-gray-300 text-center text-red-600">รวมขาดเรียน (คาบ)</th>
+                                                        <th className="p-3 border border-gray-300 text-center text-rose-600">รวมหนีเรียน (คาบ)</th>
+                                                        <th className="p-3 border border-gray-300 text-center font-bold text-orange-800">รวมทั้งหมด (คาบ)</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {isFetchingMsRisk ? (
+                                                        <tr><td colSpan="6" className="p-8 text-center text-gray-500"><i className="fa-solid fa-spinner fa-spin text-3xl mb-2"></i><br/>กำลังประมวลผลสถิติ...</td></tr>
+                                                    ) : roomStatsArray.length > 0 ? (
+                                                        roomStatsArray.map((stat, index) => (
+                                                            <tr key={stat.room} className="hover:bg-orange-50 transition border-b border-gray-200">
+                                                                <td className="p-3 border border-gray-300 text-center text-gray-500">{index + 1}</td>
+                                                                <td className="p-3 border border-gray-300 text-center font-bold text-ns-blue">ชั้น {stat.room}</td>
+                                                                <td className="p-3 border border-gray-300 text-center font-medium">{stat.stuCount}</td>
+                                                                <td className="p-3 border border-gray-300 text-center text-red-600 font-bold">{stat.absent > 0 ? stat.absent : '-'}</td>
+                                                                <td className="p-3 border border-gray-300 text-center text-rose-600 font-bold">{stat.skip > 0 ? stat.skip : '-'}</td>
+                                                                <td className="p-3 border border-gray-300 text-center font-bold text-orange-800 bg-orange-50 print:bg-transparent">{stat.absent + stat.skip}</td>
+                                                            </tr>
+                                                        ))
+                                                    ) : (
+                                                        <tr><td colSpan="6" className="p-10 text-center text-gray-400">ไม่มีสถิติการขาด/หนีเรียนตามเงื่อนไข</td></tr>
+                                                    )}
+                                                </tbody>
+                                            </table>
+
+                                            {roomStatsArray.length > 0 && !isFetchingMsRisk && (
+                                                <div className="mt-6 bg-white border border-gray-200 p-6 rounded-lg shadow-sm">
+                                                    <h4 className="font-bold text-gray-800 mb-4 text-center border-b pb-2"><i className="fa-solid fa-chart-bar text-ns-blue mr-2"></i> กราฟเปรียบเทียบสถิติ ขาด/หนีเรียน (คาบ)</h4>
+                                                    <div className="flex flex-col gap-3 mt-4">
+                                                        {roomStatsArray.map(stat => {
+                                                            const total = stat.absent + stat.skip;
+                                                            const absentWidth = total > 0 ? (stat.absent / maxChartVal) * 100 : 0;
+                                                            const skipWidth = total > 0 ? (stat.skip / maxChartVal) * 100 : 0;
+                                                            return (
+                                                                <div key={stat.room} className="flex items-center gap-4">
+                                                                    <div className="w-20 text-right text-sm font-bold text-gray-700">ชั้น {stat.room}</div>
+                                                                    <div className="flex-1 flex h-6 bg-gray-100 rounded overflow-hidden" style={{ display: 'flex' }}>
+                                                                        {stat.absent > 0 && <div style={{width: `${absentWidth}%`, backgroundColor: '#ef4444', color: 'white'}} className="h-full text-[10px] flex items-center justify-center font-bold" title={`ขาด: ${stat.absent}`}>{stat.absent}</div>}
+                                                                        {stat.skip > 0 && <div style={{width: `${skipWidth}%`, backgroundColor: '#003366', color: 'white'}} className="h-full text-[10px] flex items-center justify-center font-bold" title={`หนี: ${stat.skip}`}>{stat.skip}</div>}
+                                                                    </div>
+                                                                    <div className="w-10 text-xs font-bold text-gray-500 text-center">{total}</div>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                    <div className="flex justify-center gap-6 mt-6 pt-4 border-t text-sm font-bold text-gray-700">
+                                                        <span className="flex items-center"><span className="w-3 h-3 bg-red-500 rounded-full mr-2"></span> ร้อยละนักเรียนที่ขาดเรียน {absentPercent}%</span>
+                                                        <span className="flex items-center"><span className="w-3 h-3 bg-ns-blue rounded-full mr-2"></span> ร้อยละนักเรียนที่หนีเรียน {skipPercent}%</span>
+                                                    </div>
                                                 </div>
                                             )}
-                                        </div>
-                                        
-                                        <table className="w-full text-sm text-left border-collapse border border-gray-300 mb-8">
-                                            <thead className="bg-gray-100 text-gray-800">
-                                                <tr>
-                                                    <th className="p-3 border border-gray-300 text-center">ลำดับ</th>
-                                                    <th className="p-3 border border-gray-300 text-center">ระดับชั้น/ห้อง</th>
-                                                    <th className="p-3 border border-gray-300 text-center text-red-600">จำนวนนักเรียนที่มีประวัติ (คน)</th>
-                                                    <th className="p-3 border border-gray-300 text-center text-red-600">รวมขาดเรียน (คาบ)</th>
-                                                    <th className="p-3 border border-gray-300 text-center text-rose-600">รวมหนีเรียน (คาบ)</th>
-                                                    <th className="p-3 border border-gray-300 text-center font-bold text-orange-800">รวมทั้งหมด (คาบ)</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {isFetchingMsRisk ? (
-                                                    <tr><td colSpan="6" className="p-8 text-center text-gray-500"><i className="fa-solid fa-spinner fa-spin text-3xl mb-2"></i><br/>กำลังประมวลผลสถิติ...</td></tr>
-                                                ) : roomStatsArray.length > 0 ? (
-                                                    roomStatsArray.map((stat, index) => (
-                                                        <tr key={stat.room} className="hover:bg-orange-50 transition border-b border-gray-200">
-                                                            <td className="p-3 border border-gray-300 text-center text-gray-500">{index + 1}</td>
-                                                            <td className="p-3 border border-gray-300 text-center font-bold text-ns-blue">ชั้น {stat.room}</td>
-                                                            <td className="p-3 border border-gray-300 text-center font-medium">{stat.stuCount}</td>
-                                                            <td className="p-3 border border-gray-300 text-center text-red-600 font-bold">{stat.absent > 0 ? stat.absent : '-'}</td>
-                                                            <td className="p-3 border border-gray-300 text-center text-rose-600 font-bold">{stat.skip > 0 ? stat.skip : '-'}</td>
-                                                            <td className="p-3 border border-gray-300 text-center font-bold text-orange-800 bg-orange-50 print:bg-transparent">{stat.absent + stat.skip}</td>
-                                                        </tr>
-                                                    ))
-                                                ) : (
-                                                    <tr><td colSpan="6" className="p-10 text-center text-gray-400">ไม่มีสถิติการขาด/หนีเรียนตามเงื่อนไข</td></tr>
-                                                )}
-                                            </tbody>
-                                        </table>
-
-                                        {roomStatsArray.length > 0 && !isFetchingMsRisk && (
-                                            <div className="mt-6 bg-white border border-gray-200 p-6 rounded-lg shadow-sm">
-                                                <h4 className="font-bold text-gray-800 mb-4 text-center border-b pb-2"><i className="fa-solid fa-chart-bar text-ns-blue mr-2"></i> กราฟเปรียบเทียบสถิติ ขาด/หนีเรียน (คาบ)</h4>
-                                                <div className="flex flex-col gap-3 mt-4">
-                                                    {roomStatsArray.map(stat => {
-                                                        const total = stat.absent + stat.skip;
-                                                        const absentWidth = total > 0 ? (stat.absent / maxChartVal) * 100 : 0;
-                                                        const skipWidth = total > 0 ? (stat.skip / maxChartVal) * 100 : 0;
-                                                        return (
-                                                            <div key={stat.room} className="flex items-center gap-4">
-                                                                <div className="w-20 text-right text-sm font-bold text-gray-700">ชั้น {stat.room}</div>
-                                                                <div className="flex-1 flex h-6 bg-gray-100 rounded overflow-hidden" style={{ display: 'flex' }}>
-                                                                    {stat.absent > 0 && <div style={{width: `${absentWidth}%`, backgroundColor: '#ef4444', color: 'white'}} className="h-full text-[10px] flex items-center justify-center font-bold" title={`ขาด: ${stat.absent}`}>{stat.absent}</div>}
-                                                                    {stat.skip > 0 && <div style={{width: `${skipWidth}%`, backgroundColor: '#003366', color: 'white'}} className="h-full text-[10px] flex items-center justify-center font-bold" title={`หนี: ${stat.skip}`}>{stat.skip}</div>}
-                                                                </div>
-                                                                <div className="w-10 text-xs font-bold text-gray-500 text-center">{total}</div>
-                                                            </div>
-                                                        );
-                                                    })}
-                                                </div>
-                                                <div className="flex justify-center gap-6 mt-6 pt-4 border-t text-sm font-bold text-gray-700">
-                                                    <span className="flex items-center"><span className="w-3 h-3 bg-red-500 rounded-full mr-2"></span> ร้อยละนักเรียนที่ขาดเรียน {absentPercent}%</span>
-                                                    <span className="flex items-center"><span className="w-3 h-3 bg-ns-blue rounded-full mr-2"></span> ร้อยละนักเรียนที่หนีเรียน {skipPercent}%</span>
-                                                </div>
-                                            </div>
-                                        )}
-                                    </React.Fragment>
-                                    );
-                                })()}
+                                        </React.Fragment>
+                                        );
+                                    })()
+                                ) : (
+                                    <div className="text-center p-10 bg-gray-50 rounded-xl border border-gray-200">
+                                        <i className="fa-solid fa-chart-column text-5xl text-gray-300 mb-3"></i>
+                                        <p className="text-gray-500">กรุณาเลือก <strong>ชั้นเรียน</strong> และ <strong>ห้อง</strong> และกดปุ่ม <span className="font-bold text-red-600">ดึงข้อมูล</span> เพื่อดูรายงาน</p>
+                                    </div>
+                                )}
                             </div>
                         )}
 
                         {/* --- 3. แท็บใหม่: รายงานการจัดอันดับนักเรียน --- */}
                         {activeTab === 'ranking' && (
                             <div className="overflow-x-auto">
-                                <React.Fragment>
-                                    <div className="mb-4 bg-purple-50 border border-purple-200 p-4 rounded-lg print:bg-transparent print:border-none print:p-0 flex justify-between items-center">
-                                        <div>
-                                            <h3 className="font-bold text-purple-800 text-lg text-left"><i className="fa-solid fa-ranking-star mr-2"></i> {rankingTitle}</h3>
-                                            <p className="text-sm text-purple-700 mt-1 text-left">
-                                                สรุปยอดและจัดอันดับพฤติกรรมของนักเรียน <strong>{(classFilter && roomFilter) ? `ชั้น ${classFilter}/${roomFilter}` : 'ทุกชั้นเรียน'}</strong>
-                                            </p>
-                                        </div>
-                                        {(classFilter && roomFilter) && (
+                                {classFilter && roomFilter ? (
+                                    <React.Fragment>
+                                        <div className="mb-4 bg-purple-50 border border-purple-200 p-4 rounded-lg print:bg-transparent print:border-none print:p-0 flex justify-between items-center">
+                                            <div>
+                                                <h3 className="font-bold text-purple-800 text-lg"><i className="fa-solid fa-ranking-star mr-2"></i> จัดอันดับสถิตินักเรียน</h3>
+                                                <p className="text-sm text-purple-700 mt-1">
+                                                    สรุปยอดและจัดอันดับพฤติกรรมของนักเรียน <strong>ชั้น {classFilter}/{roomFilter}</strong>
+                                                </p>
+                                            </div>
                                             <div className="text-right text-sm text-gray-600">
                                                 <strong>ครูที่ปรึกษา:</strong> {getAdvisorName(`${classFilter}/${roomFilter}`)}
                                             </div>
-                                        )}
+                                        </div>
+                                        <table className="w-full text-sm text-left border-collapse border border-gray-300">
+                                            <thead className="bg-gray-100 text-gray-800">
+                                                <tr>
+                                                    <th className="p-3 border border-gray-300 text-center w-16">อันดับ</th>
+                                                    <th className="p-3 border border-gray-300 text-center w-28">เลขประจำตัว</th>
+                                                    <th className="p-3 border border-gray-300">ชื่อ-สกุล</th>
+                                                    <th className="p-3 border border-gray-300 text-center w-24 text-red-600">ขาด (คาบ)</th>
+                                                    <th className="p-3 border border-gray-300 text-center w-24 text-rose-600">หนี (คาบ)</th>
+                                                    <th className="p-3 border border-gray-300 text-center w-24 text-orange-600">หัก (คะแนน)</th>
+                                                    <th className="p-3 border border-gray-300 text-center w-24 text-green-600">เพิ่ม (คะแนน)</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {isFetchingMsRisk ? (
+                                                    <tr><td colSpan="7" className="p-8 text-center text-gray-500"><i className="fa-solid fa-spinner fa-spin text-3xl mb-2"></i><br/>กำลังประมวลผลสถิติ...</td></tr>
+                                                ) : sortedRankingStats.length > 0 ? (
+                                                    sortedRankingStats.map((stu, index) => (
+                                                        <tr key={stu.code} className="hover:bg-purple-50 transition border-b border-gray-200">
+                                                            <td className="p-3 border border-gray-300 text-center font-bold text-purple-700">
+                                                                {index < 3 ? <i className={`fa-solid fa-medal ${index===0?'text-yellow-500':index===1?'text-gray-400':'text-orange-400'}`}></i> : index + 1}
+                                                            </td>
+                                                            <td className="p-3 border border-gray-300 text-center font-mono">{stu.code}</td>
+                                                            <td className="p-3 border border-gray-300 font-medium">{stu.name}</td>
+                                                            <td className={`p-3 border border-gray-300 text-center font-bold ${rankingSortBy === 'absent_desc' ? 'bg-purple-100 text-purple-800' : 'text-red-600'}`}>{stu.absent > 0 ? stu.absent : '-'}</td>
+                                                            <td className={`p-3 border border-gray-300 text-center font-bold ${rankingSortBy === 'skip_desc' ? 'bg-purple-100 text-purple-800' : 'text-rose-600'}`}>{stu.skip > 0 ? stu.skip : '-'}</td>
+                                                            <td className={`p-3 border border-gray-300 text-center font-bold ${rankingSortBy === 'neg_desc' ? 'bg-purple-100 text-purple-800' : 'text-orange-600'}`}>{stu.neg > 0 ? `-${stu.neg}` : '-'}</td>
+                                                            <td className={`p-3 border border-gray-300 text-center font-bold ${rankingSortBy === 'pos_desc' ? 'bg-purple-100 text-purple-800' : 'text-green-600'}`}>{stu.pos > 0 ? `+${stu.pos}` : '-'}</td>
+                                                        </tr>
+                                                    ))
+                                                ) : (
+                                                    <tr><td colSpan="7" className="p-10 text-center text-gray-400">ไม่มีข้อมูลนักเรียนในห้องนี้</td></tr>
+                                                )}
+                                            </tbody>
+                                        </table>
+                                    </React.Fragment>
+                                ) : (
+                                    <div className="text-center p-10 bg-gray-50 rounded-xl border border-gray-200">
+                                        <i className="fa-solid fa-trophy text-5xl text-gray-300 mb-3"></i>
+                                        <p className="text-gray-500">กรุณาเลือก <strong>ชั้นเรียน</strong> และ <strong>ห้อง</strong> และกดปุ่ม <span className="font-bold text-red-600">ดึงข้อมูล</span> เพื่อดูรายงาน</p>
                                     </div>
-                                    <table className="w-full text-sm text-left border-collapse border border-gray-300">
-                                        <thead className="bg-gray-100 text-gray-800">
-                                            <tr>
-                                                <th className="p-2 border border-gray-300 text-center align-middle">อันดับ</th>
-                                                <th className="p-2 border border-gray-300 text-center align-middle">เลขประจำตัว</th>
-                                                <th className="p-2 border border-gray-300 text-center align-middle min-w-[150px]">ชื่อ-สกุล</th>
-                                                <th className="p-2 border border-gray-300 text-center align-middle">ชั้น/ห้อง</th>
-                                                {rankingSortBy === 'absent_desc' && <th className="p-2 border border-gray-300 text-center align-middle text-red-600">จำนวนคาบที่ขาด</th>}
-                                                {rankingSortBy === 'skip_desc' && <th className="p-2 border border-gray-300 text-center align-middle text-ns-blue">จำนวนคาบที่หนี</th>}
-                                                {rankingSortBy === 'neg_desc' && <th className="p-2 border border-gray-300 text-center align-middle text-orange-600">คะแนนที่ถูกหัก</th>}
-                                                {rankingSortBy === 'pos_desc' && <th className="p-2 border border-gray-300 text-center align-middle text-green-600">คะแนนที่ถูกเพิ่ม</th>}
-                                                {(rankingSortBy === 'neg_desc' || rankingSortBy === 'pos_desc') && <th className="p-2 border border-gray-300 text-center align-middle text-blue-600">คะแนนคงเหลือ</th>}
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {isFetchingMsRisk ? (
-                                                <tr><td colSpan={(rankingSortBy === 'neg_desc' || rankingSortBy === 'pos_desc') ? "6" : "5"} className="p-8 text-center text-gray-500"><i className="fa-solid fa-spinner fa-spin text-3xl mb-2"></i><br/>กำลังประมวลผลสถิติ...</td></tr>
-                                            ) : sortedRankingStats.length > 0 ? (
-                                                sortedRankingStats.map((stu, index) => (
-                                                    <tr key={stu.code} className="hover:bg-purple-50 transition border-b border-gray-200">
-                                                        <td className="p-3 border border-gray-300 text-center font-bold text-purple-700">
-                                                            <span className="mr-1">{index + 1}</span>
-                                                            {index < 3 && <i className={`fa-solid fa-medal ${index===0?'text-yellow-500':index===1?'text-gray-400':'text-orange-400'}`}></i>}
-                                                        </td>
-                                                        <td className="p-3 border border-gray-300 text-center font-mono">{stu.code}</td>
-                                                        <td className="p-3 border border-gray-300 text-left font-medium">{stu.name}</td>
-                                                        <td className="p-3 border border-gray-300 text-center">{stu.classLevel}/{stu.room}</td>
-                                                        {rankingSortBy === 'absent_desc' && <td className="p-3 border border-gray-300 text-center font-bold bg-purple-100 text-purple-800">{stu.absent}</td>}
-                                                        {rankingSortBy === 'skip_desc' && <td className="p-3 border border-gray-300 text-center font-bold bg-purple-100 text-purple-800">{stu.skip}</td>}
-                                                        {rankingSortBy === 'neg_desc' && <td className="p-3 border border-gray-300 text-center font-bold bg-purple-100 text-purple-800">-{stu.neg}</td>}
-                                                        {rankingSortBy === 'pos_desc' && <td className="p-3 border border-gray-300 text-center font-bold bg-purple-100 text-purple-800">+{stu.pos}</td>}
-                                                        {(rankingSortBy === 'neg_desc' || rankingSortBy === 'pos_desc') && <td className="p-3 border border-gray-300 text-center font-bold text-blue-800 bg-blue-50 print:bg-transparent">{stu.currentRemainingScore}</td>}
-                                                    </tr>
-                                                ))
-                                            ) : (
-                                                <tr><td colSpan={(rankingSortBy === 'neg_desc' || rankingSortBy === 'pos_desc') ? "6" : "5"} className="p-10 text-center text-gray-400">ไม่มีข้อมูลนักเรียนที่ตรงตามเงื่อนไขที่ค้นหา</td></tr>
-                                            )}
-                                        </tbody>
-                                    </table>
-                                </React.Fragment>
+                                )}
                             </div>
                         )}
                     </div>
                 </div>
             );
         };
-// --- Main Application ---
+
+        // 16. หน้าจัดการกำหนดกิจกรรมชุมนุม (ClubManagerView)
+        const ClubManagerView = ({ teachers, user, isSyncing }) => {
+            const TARGET_SHEET_ID = '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48';
+            const [clubs, setClubs] = useState([]);
+            const [isLoading, setIsLoading] = useState(false);
+            const [isSaving, setIsSaving] = useState(false);
+
+            const [selectedDept, setSelectedDept] = useState('');
+            const [selectedTeachers, setSelectedTeachers] = useState([]);
+            const [formData, setFormData] = useState({
+                id: '', clubCode: '', clubName: '', capacity: '', objective: '', location: '', equipment: ''
+            });
+
+            const [editingRecord, setEditingRecord] = useState(null);
+            const [deletingRecordId, setDeletingRecordId] = useState(null);
+
+            useEffect(() => {
+                const fetchClubs = async () => {
+                    setIsLoading(true);
+                    try {
+                        const res = await callGAS('getClubs', { targetSheetId: TARGET_SHEET_ID });
+                        if (res.status === 'success') {
+                            setClubs(res.data || []);
+                            generateNextCode(res.data || []);
+                        }
+                    } catch(e) {
+                        console.error(e);
+                    }
+                    setIsLoading(false);
+                };
+                fetchClubs();
+            // eslint-disable-next-line react-hooks/exhaustive-deps
+            }, []);
+
+            const generateNextCode = (clubList) => {
+                if (!clubList || clubList.length === 0) {
+                    setFormData(prev => ({ ...prev, clubCode: 'AC001' }));
+                    return;
+                }
+                let maxNum = 0;
+                clubList.forEach(c => {
+                    const match = String(c.clubCode).match(/AC(\d+)/);
+                    if (match) {
+                        const num = parseInt(match[1], 10);
+                        if (num > maxNum) maxNum = num;
+                    }
+                });
+                const nextCode = `AC${String(maxNum + 1).padStart(3, '0')}`;
+                setFormData(prev => ({ ...prev, clubCode: nextCode }));
+            };
+
+            const standardDepts = ['วิทยาศาสตร์และเทคโนโลยี', 'คณิตศาสตร์', 'ภาษาไทย', 'ภาษาต่างประเทศ', 'สังคมศึกษา ศาสนาและวัฒนธรรม', 'การงานอาชีพ', 'สุขศึกษาและพลศึกษา', 'ศิลปะ'];
+            const departments = [...new Set([...standardDepts, ...(teachers || []).map(t => t.department).filter(Boolean)])].sort();
+            const filteredTeachers = (teachers || []).filter(t => selectedDept ? t.department === selectedDept : true).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+
+            const toggleTeacher = (tName) => {
+                if (selectedTeachers.includes(tName)) {
+                    setSelectedTeachers(selectedTeachers.filter(n => n !== tName));
+                } else {
+                    setSelectedTeachers([...selectedTeachers, tName]);
+                }
+            };
+
+            const handleSave = async (e) => {
+                e.preventDefault();
+                if (selectedTeachers.length === 0) return alert('กรุณาเลือกครูประจำวิชาชุมนุมอย่างน้อย 1 คน');
+                setIsSaving(true);
+                const newRecord = {
+                    ...formData,
+                    id: formData.id || Date.now().toString(),
+                    teachers: selectedTeachers.join(', ')
+                };
+
+                try {
+                    await callGAS('saveClub', { ...newRecord, targetSheetId: TARGET_SHEET_ID });
+                    const newClubs = [newRecord, ...clubs];
+                    setClubs(newClubs);
+                    alert('บันทึกข้อมูลสำเร็จ');
+                    setFormData({ id: '', clubCode: '', clubName: '', capacity: '', objective: '', location: '', equipment: '' });
+                    setSelectedTeachers([]);
+                    generateNextCode(newClubs);
+                } catch (err) {
+                    alert('บันทึกล้มเหลว: ' + err.message);
+                }
+                setIsSaving(false);
+            };
+
+            const saveEdit = async (e) => {
+                e.preventDefault();
+                if (!editingRecord.teachers) return alert('กรุณาระบุครูประจำวิชาชุมนุม');
+                setIsSaving(true);
+                try {
+                    await callGAS('editClub', { ...editingRecord, targetSheetId: TARGET_SHEET_ID });
+                    setClubs(clubs.map(c => c.id === editingRecord.id ? editingRecord : c));
+                    setEditingRecord(null);
+                    alert('แก้ไขข้อมูลสำเร็จ');
+                } catch (err) {
+                    alert('แก้ไขล้มเหลว: ' + err.message);
+                }
+                setIsSaving(false);
+            };
+
+            const handleDeleteConfirm = async () => {
+                if (!deletingRecordId) return;
+                setIsSaving(true);
+                try {
+                    await callGAS('deleteClub', { id: deletingRecordId, targetSheetId: TARGET_SHEET_ID });
+                    setClubs(clubs.filter(c => c.id !== deletingRecordId));
+                    setDeletingRecordId(null);
+                    alert('ลบข้อมูลสำเร็จ');
+                    generateNextCode(clubs.filter(c => c.id !== deletingRecordId));
+                } catch(e) {
+                    alert('ลบล้มเหลว: ' + e.message);
+                }
+                setIsSaving(false);
+            };
+
+            const normalizeName = (name) => {
+                if (!name) return '';
+                let clean = String(name).replace(/[\s\u200B-\u200D\uFEFF\.\-\_]/g, ''); 
+                const prefixes = ['ผู้อำนวยการโรงเรียน', 'ผู้อำนวยการ', 'ผอ', 'รองผู้อำนวยการ', 'รอง', 'ผู้ช่วยศาสตราจารย์', 'ผศ', 'นาย', 'นางสาว', 'นส', 'นาง', 'ดช', 'ดญ', 'ว่าที่รต', 'ว่าที่ร้อยตรี', 'ครู', 'อาจารย์', 'อ'];
+                let hasPrefix = true;
+                while(hasPrefix) {
+                    hasPrefix = false;
+                    for (let prefix of prefixes) {
+                        if (clean.startsWith(prefix)) {
+                            clean = clean.substring(prefix.length);
+                            hasPrefix = true; break;
+                        }
+                    }
+                }
+                return clean;
+            };
+
+            const userCleanName = normalizeName(user ? user.name : '');
+            
+            const displayClubs = clubs.filter(c => {
+                if (user && user.role === 'admin') return true; 
+                const teacherNames = String(c.teachers).split(',').map(t => normalizeName(t));
+                return teacherNames.some(tName => tName === userCleanName || tName.includes(userCleanName) || userCleanName.includes(tName));
+            });
+
+            return (
+                <div className="space-y-6 animate-[fadeIn_0.3s_ease-out]">
+                    <div className="bg-white p-6 rounded-xl shadow-sm border-t-4 border-green-500">
+                        <div className="flex justify-between items-center mb-4 border-b pb-4">
+                            <h2 className="text-xl font-bold text-ns-blue"><i className="fa-solid fa-users-rectangle mr-2 text-green-500"></i> กำหนดกิจกรรมชุมนุม</h2>
+                        </div>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-green-50 p-4 rounded-lg border border-green-100 mb-6">
+                            <div>
+                                <label className="block text-sm font-bold text-green-800 mb-2">1. เลือกกลุ่มสาระการเรียนรู้</label>
+                                <select 
+                                    value={selectedDept} 
+                                    onChange={(e) => setSelectedDept(e.target.value)} 
+                                    className="w-full border-2 border-green-200 rounded-lg p-2 focus:ring-2 focus:ring-ns-blue outline-none bg-white"
+                                >
+                                    <option value="">-- เลือกกลุ่มสาระ --</option>
+                                    {departments.map(d => <option key={d} value={d}>{d}</option>)}
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-bold text-green-800 mb-2">2. เลือกครูประจำวิชาชุมนุม (เลือกได้หลายคน)</label>
+                                <div className="bg-white border-2 border-green-200 rounded-lg p-2 max-h-40 overflow-y-auto shadow-inner">
+                                    {filteredTeachers.map(t => (
+                                        <label key={t.id} className="flex items-center space-x-2 p-2 hover:bg-green-50 rounded cursor-pointer border-b last:border-b-0 transition">
+                                            <input type="checkbox" checked={selectedTeachers.includes(t.name)} onChange={() => toggleTeacher(t.name)} className="w-4 h-4 text-green-600 rounded focus:ring-green-500" />
+                                            <span className="text-sm font-medium">{t.name}</span>
+                                        </label>
+                                    ))}
+                                    {filteredTeachers.length === 0 && <p className="text-sm text-gray-400 p-2 text-center mt-2">กรุณาเลือกกลุ่มสาระเพื่อแสดงรายชื่อครู</p>}
+                                </div>
+                                {selectedTeachers.length > 0 && (
+                                    <div className="mt-3 text-sm text-green-800 bg-green-100 p-2 rounded-lg border border-green-200">
+                                        <strong>ครูที่เลือก:</strong> {selectedTeachers.join(', ')}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        <form onSubmit={handleSave} className="bg-white p-5 rounded-lg border border-gray-200 shadow-sm space-y-4">
+                            <h3 className="font-bold text-lg text-gray-800 mb-2 border-b pb-2">3. ข้อมูลกิจกรรมชุมนุม</h3>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <div>
+                                    <label className="block text-sm font-bold text-gray-700 mb-1">รหัสกิจกรรม (Auto)</label>
+                                    <input type="text" value={formData.clubCode} readOnly className="w-full border rounded-lg p-2 bg-gray-100 font-bold text-gray-500 outline-none" />
+                                </div>
+                                <div className="md:col-span-2">
+                                    <label className="block text-sm font-bold text-gray-700 mb-1">ชื่อกิจกรรมชุมนุม <span className="text-red-500">*</span></label>
+                                    <input type="text" value={formData.clubName} onChange={e=>setFormData({...formData, clubName: e.target.value})} className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-ns-blue outline-none" required />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-bold text-gray-700 mb-1">จำนวนที่รับ (คน) <span className="text-red-500">*</span></label>
+                                    <input type="number" value={formData.capacity} onChange={e=>setFormData({...formData, capacity: e.target.value})} className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-ns-blue outline-none" required />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-bold text-gray-700 mb-1">สถานที่เรียน <span className="text-red-500">*</span></label>
+                                    <input type="text" value={formData.location} onChange={e=>setFormData({...formData, location: e.target.value})} className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-ns-blue outline-none" required />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-bold text-gray-700 mb-1">อุปกรณ์ที่ต้องเตรียม</label>
+                                    <input type="text" value={formData.equipment} onChange={e=>setFormData({...formData, equipment: e.target.value})} className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-ns-blue outline-none" placeholder="ระบุถ้ามี" />
+                                </div>
+                                <div className="md:col-span-3">
+                                    <label className="block text-sm font-bold text-gray-700 mb-1">วัตถุประสงค์ <span className="text-red-500">*</span></label>
+                                    <textarea value={formData.objective} onChange={e=>setFormData({...formData, objective: e.target.value})} className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-ns-blue outline-none" rows="2" required></textarea>
+                                </div>
+                            </div>
+                            <div className="text-right pt-4 border-t mt-4">
+                                <button type="submit" disabled={isSaving} className="bg-ns-blue text-white px-8 py-2 rounded-lg shadow hover:bg-blue-800 font-bold transition disabled:opacity-50">
+                                    {isSaving ? <i className="fa-solid fa-spinner fa-spin mr-2"></i> : <i className="fa-solid fa-save mr-2"></i>}
+                                    บันทึกกิจกรรมชุมนุม
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+
+                    <div className="bg-white p-6 rounded-xl shadow-sm border-t-4 border-gray-600">
+                        <div className="flex justify-between items-center mb-4 border-b pb-2">
+                            <h2 className="text-xl font-bold text-gray-800"><i className="fa-solid fa-list-check mr-2"></i> รายการกิจกรรมชุมนุมของคุณ</h2>
+                            {(isLoading || isSyncing) && <span className="text-sm text-gray-500 animate-pulse"><i className="fa-solid fa-sync fa-spin"></i> กำลังโหลด...</span>}
+                        </div>
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-sm text-left border-collapse">
+                                <thead className="bg-gray-100 text-gray-600">
+                                    <tr>
+                                        <th className="p-3 border text-center w-12">ลำดับ</th>
+                                        <th className="p-3 border text-center">รหัส</th>
+                                        <th className="p-3 border">ชื่อกิจกรรมชุมนุม</th>
+                                        <th className="p-3 border">ครูประจำวิชา</th>
+                                        <th className="p-3 border text-center">รับ (คน)</th>
+                                        <th className="p-3 border">สถานที่</th>
+                                        <th className="p-3 border text-center w-24">จัดการ</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {displayClubs.length > 0 ? displayClubs.map((c, idx) => (
+                                        <tr key={c.id} className="hover:bg-gray-50 border-b transition">
+                                            <td className="p-3 border text-center text-gray-500">{idx + 1}</td>
+                                            <td className="p-3 border font-mono text-ns-blue font-bold text-center">{c.clubCode}</td>
+                                            <td className="p-3 border font-bold text-gray-800">{c.clubName}</td>
+                                            <td className="p-3 border text-gray-600 text-xs">{c.teachers}</td>
+                                            <td className="p-3 border text-center font-bold text-ns-blue bg-blue-50">{c.capacity}</td>
+                                            <td className="p-3 border">{c.location}</td>
+                                            <td className="p-3 border text-center space-x-2">
+                                                <button onClick={() => setEditingRecord(c)} className="text-blue-500 hover:text-blue-700 bg-blue-50 p-1.5 rounded"><i className="fa-solid fa-edit"></i></button>
+                                                <button onClick={() => setDeletingRecordId(c.id)} className="text-red-500 hover:text-red-700 bg-red-50 p-1.5 rounded"><i className="fa-solid fa-trash"></i></button>
+                                            </td>
+                                        </tr>
+                                    )) : (<tr><td colSpan="7" className="p-6 text-center text-gray-400">ไม่มีรายการกิจกรรมชุมนุมของคุณ</td></tr>)}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    {/* Modal แก้ไข */}
+                    {editingRecord && (
+                        <div className="fixed inset-0 z-40 bg-black/50 flex items-center justify-center p-4 backdrop-blur-sm">
+                            <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-2xl">
+                                <h3 className="text-xl font-bold text-ns-blue mb-4 border-b pb-2"><i className="fa-solid fa-pen-to-square mr-2"></i> แก้ไขข้อมูลกิจกรรมชุมนุม</h3>
+                                <form onSubmit={saveEdit} className="space-y-4">
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div><label className="block text-sm text-gray-600 mb-1">รหัสกิจกรรม</label><input type="text" value={editingRecord.clubCode} className="w-full border rounded p-2 bg-gray-100 font-bold" readOnly /></div>
+                                        <div><label className="block text-sm text-gray-600 mb-1">ชื่อกิจกรรม <span className="text-red-500">*</span></label><input type="text" value={editingRecord.clubName} onChange={e=>setEditingRecord({...editingRecord, clubName: e.target.value})} className="w-full border rounded p-2 focus:ring-2 focus:ring-ns-blue outline-none" required /></div>
+                                        <div className="md:col-span-2">
+                                            <label className="block text-sm text-gray-600 mb-1">ครูประจำวิชา (คั่นด้วยลูกน้ำ , ) <span className="text-red-500">*</span></label>
+                                            <input type="text" value={editingRecord.teachers} onChange={e=>setEditingRecord({...editingRecord, teachers: e.target.value})} className="w-full border rounded p-2 focus:ring-2 focus:ring-ns-blue outline-none" required />
+                                        </div>
+                                        <div><label className="block text-sm text-gray-600 mb-1">จำนวนที่รับ <span className="text-red-500">*</span></label><input type="number" value={editingRecord.capacity} onChange={e=>setEditingRecord({...editingRecord, capacity: e.target.value})} className="w-full border rounded p-2 focus:ring-2 focus:ring-ns-blue outline-none" required /></div>
+                                        <div><label className="block text-sm text-gray-600 mb-1">สถานที่ <span className="text-red-500">*</span></label><input type="text" value={editingRecord.location} onChange={e=>setEditingRecord({...editingRecord, location: e.target.value})} className="w-full border rounded p-2 focus:ring-2 focus:ring-ns-blue outline-none" required /></div>
+                                        <div className="md:col-span-2"><label className="block text-sm text-gray-600 mb-1">อุปกรณ์</label><input type="text" value={editingRecord.equipment} onChange={e=>setEditingRecord({...editingRecord, equipment: e.target.value})} className="w-full border rounded p-2 focus:ring-2 focus:ring-ns-blue outline-none" /></div>
+                                        <div className="md:col-span-2"><label className="block text-sm text-gray-600 mb-1">วัตถุประสงค์ <span className="text-red-500">*</span></label><input type="text" value={editingRecord.objective} onChange={e=>setEditingRecord({...editingRecord, objective: e.target.value})} className="w-full border rounded p-2 focus:ring-2 focus:ring-ns-blue outline-none" required /></div>
+                                    </div>
+                                    <div className="flex justify-end space-x-3 mt-6 pt-4 border-t">
+                                        <button type="button" onClick={() => setEditingRecord(null)} className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300">ยกเลิก</button>
+                                        <button type="submit" disabled={isSaving} className="px-4 py-2 bg-ns-blue text-white rounded hover:bg-blue-800 shadow flex items-center">
+                                            {isSaving ? <i className="fa-solid fa-spinner fa-spin mr-2"></i> : null}
+                                            {isSaving ? 'กำลังบันทึก...' : 'ยืนยันการแก้ไข'}
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Modal ยืนยันลบ */}
+                    {deletingRecordId && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+                            <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-sm text-center animate-[bounce_0.3s_ease-in-out]">
+                                <i className="fa-solid fa-triangle-exclamation text-5xl text-red-500 mb-4"></i>
+                                <h3 className="text-xl font-bold text-gray-800 mb-2">ยืนยันการลบข้อมูล</h3>
+                                <p className="text-sm text-gray-600 mb-6">คุณต้องการลบกิจกรรมชุมนุมนี้ใช่หรือไม่?</p>
+                                <div className="flex justify-center space-x-3">
+                                    <button onClick={() => setDeletingRecordId(null)} className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition">ยกเลิก</button>
+                                    <button onClick={handleDeleteConfirm} disabled={isSaving} className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 shadow">{isSaving ? 'กำลังลบ...' : 'ยืนยันการลบ'}</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        // --- Main Application ---
         const App = () => {
             const defaultLogo = "https://upload.wikimedia.org/wikipedia/th/a/a2/Narasikkhalai_School_Logo.png";
             const [schoolConfig, setSchoolConfig] = useState(() => {
@@ -8275,6 +8657,7 @@
                 { id: 'check_behavior', icon: 'fa-user-check', label: 'ตรวจสอบคะแนนพฤติกรรม' },
                 { id: 'activity', icon: 'fa-clipboard-user', label: 'เข้าร่วมกิจกรรม' },
                 { id: 'schedule', icon: 'fa-calendar-alt', label: 'กำหนดตารางสอน' },
+                { id: 'club_manage', icon: 'fa-users-rectangle', label: 'กำหนดกิจกรรมชุมนุม' },
                 { id: 'register', icon: 'fa-address-book', label: 'ลงทะเบียนวิชา' }, 
                 { id: 'attendance', icon: 'fa-user-edit', label: 'เช็คชื่อเข้าเรียน' },
                 { id: 'leave', icon: 'fa-user-md', label: 'แจ้งนักเรียนลา' },
@@ -8290,7 +8673,7 @@
                 const saved = localStorage.getItem('ns_role_perms');
                 let perms = saved ? JSON.parse(saved) : {
                     admin: allMenus.map(m => m.id), 
-                    user: ['home', 'time', 'behavior', 'check_behavior', 'activity', 'schedule', 'register', 'attendance', 'leave', 'history', 'students', 'reports'] 
+                    user: ['home', 'time', 'behavior', 'check_behavior', 'activity', 'schedule', 'club_manage', 'register', 'attendance', 'leave', 'history', 'students', 'reports'] 
                 };
                 
                 perms.admin = allMenus.map(m => m.id);
@@ -8300,6 +8683,7 @@
                 if (!perms.user.includes('check_behavior')) perms.user.push('check_behavior');
                 if (!perms.user.includes('leave')) perms.user.push('leave'); 
                 if (!perms.user.includes('schedule')) perms.user.push('schedule'); 
+                if (!perms.user.includes('club_manage')) perms.user.push('club_manage'); 
                 if (!perms.user.includes('register')) perms.user.push('register'); 
                 if (!perms.user.includes('attendance')) perms.user.push('attendance'); 
                 if (!perms.user.includes('exempt')) perms.user.push('exempt'); 
@@ -8603,6 +8987,8 @@
                         return <ActivityView students={globalStudents} activitiesSetting={schoolConfig.activities || [{id:1, name:'กิจกรรมเข้าแถวหน้าเสาธง'}]} records={globalActivityRecords} setRecords={setGlobalActivityRecords} user={user} isSyncing={isSyncing} />;
                     case 'schedule':
                         return <ScheduleManager teachers={globalTeachers} />;
+                    case 'club_manage':
+                        return <ClubManagerView teachers={globalTeachers} user={user} isSyncing={isSyncing} />;
                     case 'register':
                         return <RegisterView user={user} students={globalStudents} teachers={globalTeachers} records={globalRegistrations} setRecords={setGlobalRegistrations} isSyncing={isSyncing} />;
                     case 'attendance':
