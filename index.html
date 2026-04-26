@@ -6791,10 +6791,10 @@
             );
         };
 
-        // 11. หน้ารายงานผล (ReportsView) - ชุดใหม่ครบทุกฟังก์ชัน
+   // // 11. หน้ารายงานผล (ReportsView) - ชุดใหม่ครบทุกฟังก์ชัน + ระบบกิจกรรมชุมนุม และ Excel Export
         const ReportsView = ({ students, timeRecords, behaviorRecords, activityRecords, activitiesSetting, schoolConfig, teachers, leaveRecords, user, registrations, allSchedules }) => {
             const [activeTab, setActiveTab] = useState('stats');
-            const [dateFilter, setDateFilter] = useState('today');
+            const [dateFilter, setDateFilter] = useState('all');
             const [customStart, setCustomStart] = useState('');
             const [customEnd, setCustomEnd] = useState('');
 
@@ -6803,24 +6803,26 @@
             const [roomFilter, setRoomFilter] = useState('');
             const [activityFilter, setActivityFilter] = useState('');
             const [evalFilter, setEvalFilter] = useState('all');
-            const [behaviorFilter, setBehaviorFilter] = useState(''); // เพิ่ม State สำหรับกรองรายการพฤติกรรม
+            const [behaviorFilter, setBehaviorFilter] = useState('');
 
-            // --- เพิ่ม State สำหรับรายงาน แนวโน้ม ม.ส. / สถิติขาด-หนี / จัดอันดับ ---
             const [msRiskData, setMsRiskData] = useState([]);
-            const [rawRiskRecords, setRawRiskRecords] = useState([]); // เก็บข้อมูลดิบเพื่อใช้ในรายงานสถิติอื่นๆ
+            const [rawRiskRecords, setRawRiskRecords] = useState([]); 
             const [isFetchingMsRisk, setIsFetchingMsRisk] = useState(false);
-            const [rankingSortBy, setRankingSortBy] = useState('neg_desc'); // State สำหรับการจัดอันดับ
+            const [rankingSortBy, setRankingSortBy] = useState('neg_desc'); 
+
+            // --- State สำหรับรายงาน กิจกรรมชุมนุม ---
+            const [clubRecords, setClubRecords] = useState([]);
+            const [isFetchingClub, setIsFetchingClub] = useState(false);
+            const [clubReportType, setClubReportType] = useState('by_room'); // by_room, by_club, all_reg, unreg
+            const [clubFilter, setClubFilter] = useState('');
 
             // --- ฟังก์ชันสร้างหน้าต่าง Print Preview (มาตรฐานงานสารบรรณ) ---
             const handlePrintReport = () => {
                 const printContent = document.getElementById('print-area').innerHTML;
                 const printWindow = window.open('', '_blank');
                 
-                // กำหนดแนวหน้ากระดาษ (แนวตั้ง / แวนนอน) ตามประเภทรายงาน
                 const isPortrait = ['stats', 'absent_stats', 'ranking', 'eval'].includes(activeTab);
-                const pageLayout = isPortrait ? 'portrait' : 'landscape';
-                const containerMaxWidth = isPortrait ? '210mm' : '297mm';
-                const containerMinHeight = isPortrait ? '297mm' : '210mm';
+                const defaultPageLayout = isPortrait ? 'portrait' : 'landscape';
 
                 printWindow.document.write(`
                     <!DOCTYPE html>
@@ -6830,38 +6832,39 @@
                         <title>รายงานผล (Print Preview) - NS Student Care</title>
                         <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap" rel="stylesheet">
                         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-                        <style>
-                            @page { size: A4 ${pageLayout}; margin: 15mm; }
+                        <style id="base-print-style">
+                            @page { size: A4 ${defaultPageLayout}; margin: 15mm; }
                             * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-                            body { font-family: 'Sarabun', sans-serif !important; background-color: #525659; margin: 0; padding-top: 80px; }
+                            body { font-family: 'Sarabun', sans-serif !important; background-color: #525659; margin: 0; padding-top: 130px; }
                             
-                            /* แถบเครื่องมือด้านบน (เขียนด้วย Pure CSS ป้องกันบัค) */
-                            .preview-toolbar { position: fixed; top: 0; left: 0; right: 0; background: #1e293b; color: white; padding: 15px 30px; display: flex; justify-content: space-between; align-items: center; z-index: 9999; box-shadow: 0 4px 10px rgba(0,0,0,0.5); height: 70px; box-sizing: border-box; border-bottom: 3px solid #3b82f6; }
+                            .preview-toolbar { position: fixed; top: 0; left: 0; right: 0; background: #1e293b; color: white; padding: 15px 30px; display: flex; flex-direction: column; gap: 10px; z-index: 9999; box-shadow: 0 4px 10px rgba(0,0,0,0.5); box-sizing: border-box; border-bottom: 3px solid #3b82f6; }
+                            .toolbar-top { display: flex; justify-content: space-between; align-items: center; }
+                            .toolbar-bottom { display: flex; justify-content: flex-start; align-items: center; gap: 20px; background: #334155; padding: 10px 15px; border-radius: 8px; }
                             
-                            /* ปรับแต่งปุ่มในแถบเครื่องมือ */
+                            .setting-group { display: flex; align-items: center; gap: 8px; font-size: 14pt; }
+                            .setting-group select { padding: 4px 8px; border-radius: 4px; border: 1px solid #cbd5e1; font-family: 'Sarabun', sans-serif; font-size: 14pt; color: #1e293b; outline: none; cursor: pointer; }
+                            
                             .btn-container { display: flex; gap: 15px; }
                             .print-btn { background: #3b82f6; color: white; border: 1px solid #2563eb; padding: 8px 30px; font-size: 16pt; font-family: 'Sarabun', sans-serif; cursor: pointer; border-radius: 8px; font-weight: bold; transition: 0.2s; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
                             .print-btn:hover { background: #2563eb; transform: translateY(-1px); }
                             .close-btn { background: #ef4444; color: white; border: 1px solid #dc2626; padding: 8px 30px; font-size: 16pt; font-family: 'Sarabun', sans-serif; cursor: pointer; border-radius: 8px; font-weight: bold; transition: 0.2s; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
                             .close-btn:hover { background: #dc2626; transform: translateY(-1px); }
                             
-                            /* ปรับคอนเทนเนอร์ให้ยืดหยุ่นตามตาราง */
-                            .a4-container { background: white; width: 100%; max-width: ${containerMaxWidth}; min-height: ${containerMinHeight}; margin: 0 auto; padding: 15mm; box-shadow: 0 0 20px rgba(0,0,0,0.5); color: #000; box-sizing: border-box; overflow: hidden; }
+                            .a4-container { background: white; width: 100%; max-width: 210mm; min-height: 297mm; margin: 0 auto; padding: 15mm; box-shadow: 0 0 20px rgba(0,0,0,0.5); color: #000; box-sizing: border-box; overflow: hidden; transition: all 0.3s ease; }
                             
-                            /* บังคับตารางให้เป็นมาตรฐานและยืดหยุ่นไม่ตกบรรทัด */
                             table { width: 100%; border-collapse: collapse; border: 1px solid #000 !important; margin-top: 15px; table-layout: auto !important; }
-                            th, td { border: 1px solid #000 !important; padding: 4px 4px !important; font-size: ${isPortrait ? '10pt' : '12pt'} !important; vertical-align: middle !important; line-height: 1.1 !important; white-space: nowrap !important; color: #000 !important; }
+                            th, td { border: 1px solid #000 !important; padding: 6px 4px !important; font-size: ${isPortrait ? '10pt' : '12pt'} !important; vertical-align: middle !important; line-height: 1.5 !important; white-space: nowrap !important; color: #000 !important; }
                             th { font-weight: bold; text-align: center; background-color: #f3f4f6 !important; vertical-align: middle !important; }
+                            .wrap-objective { white-space: normal !important; word-wrap: break-word !important; min-width: 250px; }
+                            .wrap-text-long { white-space: normal !important; word-wrap: break-word !important; min-width: 150px; }
                             
                             .no-print { display: none !important; }
                             
-                            /* ปรับขนาดฟอนต์ให้ได้มาตรฐาน 16pt (TH Sarabun) */
                             h2 { font-size: 18pt !important; font-weight: bold; text-align: left; color: #000 !important; margin-bottom: 10px; }
                             h3 { font-size: 16pt !important; font-weight: bold; text-align: left; color: #000 !important; margin-top: 10px; }
                             p, span, div { font-size: 15pt; line-height: 1.4; color: inherit; }
                             table p, table span, table div, table i { font-size: inherit !important; color: inherit !important; }
                             
-                            /* จัดส่วนหัวรายงาน */
                             .print-header-container { display: flex !important; align-items: center !important; justify-content: flex-start !important; border-bottom: 2px solid #000 !important; padding-bottom: 15px !important; margin-bottom: 20px !important; flex-direction: row !important; text-align: left !important; }
                             .print-logo { width: 85px !important; height: 85px !important; object-fit: contain !important; margin-right: 25px !important; margin-bottom: 0 !important; display: block !important; }
                             .print-title-text { display: flex !important; flex-direction: column !important; text-align: left !important; align-items: flex-start !important; }
@@ -6877,19 +6880,91 @@
                             }
                         </style>
                         <script src="https://cdn.tailwindcss.com"></${'script'}>
+                        <script>
+                            function updatePrintStyles() {
+                                const size = document.getElementById('paperSize').value;
+                                const orientation = document.getElementById('orientation').value;
+                                const margin = document.getElementById('margin').value;
+
+                                // อัปเดตการตั้งค่า @page สำหรับตอนพิมพ์จริง
+                                const styleId = 'dynamic-print-style';
+                                let styleEl = document.getElementById(styleId);
+                                if (!styleEl) {
+                                    styleEl = document.createElement('style');
+                                    styleEl.id = styleId;
+                                    document.head.appendChild(styleEl);
+                                }
+                                styleEl.innerHTML = '@page { size: ' + size + ' ' + orientation + '; margin: ' + margin + '; }';
+
+                                // อัปเดตขนาดพรีวิวบนหน้าจอ
+                                const container = document.querySelector('.a4-container');
+                                container.style.padding = margin;
+                                
+                                let width = '210mm';
+                                let minHeight = '297mm';
+                                if(size === 'A4') { width = orientation === 'portrait' ? '210mm' : '297mm'; minHeight = orientation === 'portrait' ? '297mm' : '210mm'; }
+                                else if(size === 'A3') { width = orientation === 'portrait' ? '297mm' : '420mm'; minHeight = orientation === 'portrait' ? '420mm' : '297mm'; }
+                                else if(size === 'Letter') { width = orientation === 'portrait' ? '215.9mm' : '279.4mm'; minHeight = orientation === 'portrait' ? '279.4mm' : '215.9mm'; }
+                                else if(size === 'Legal') { width = orientation === 'portrait' ? '215.9mm' : '355.6mm'; minHeight = orientation === 'portrait' ? '355.6mm' : '215.9mm'; }
+                                
+                                container.style.maxWidth = width;
+                                container.style.minHeight = minHeight;
+                                
+                                // ปรับฟอนต์ยืดหยุ่นตามแนวกระดาษ (แนวนอนใช้ฟอนต์ใหญ่ขึ้นได้)
+                                const thTds = document.querySelectorAll('th, td');
+                                const isLandscapeOrA3 = orientation === 'landscape' || size === 'A3';
+                                const baseFontSize = isLandscapeOrA3 ? '12pt' : '10pt';
+                                thTds.forEach(el => { el.style.setProperty('font-size', baseFontSize, 'important'); });
+                            }
+
+                            // เซ็ตค่าตั้งต้นตอนเปิดหน้าต่าง
+                            window.onload = function() {
+                                document.getElementById('orientation').value = '${defaultPageLayout}';
+                                updatePrintStyles();
+                            };
+                        </${'script'}>
                     </head>
                     <body>
                         <div class="preview-toolbar">
-                            <div style="font-size: 18pt; font-weight: bold; color: #f8fafc !important;">
-                                ระบบรายงานผล (Print Preview) - ฟอนต์ TH Sarabun New
+                            <div class="toolbar-top">
+                                <div style="font-size: 18pt; font-weight: bold; color: #f8fafc !important;">
+                                    ระบบรายงานผล (Print Preview)
+                                </div>
+                                <div class="btn-container">
+                                    <button class="print-btn" onclick="window.print()">
+                                        <i class="fa-solid fa-print"></i> พิมพ์ / Save PDF
+                                    </button>
+                                    <button class="close-btn" onclick="window.close()">
+                                        <i class="fa-solid fa-times"></i> ปิด
+                                    </button>
+                                </div>
                             </div>
-                            <div class="btn-container">
-                                <button class="print-btn" onclick="window.print()">
-                                    พิมพ์รายงาน / PDF
-                                </button>
-                                <button class="close-btn" onclick="window.close()">
-                                    ปิดหน้าต่าง X
-                                </button>
+                            <div class="toolbar-bottom">
+                                <div class="setting-group">
+                                    <label>📄 ขนาดกระดาษ:</label>
+                                    <select id="paperSize" onchange="updatePrintStyles()">
+                                        <option value="A4">A4 (มาตรฐาน)</option>
+                                        <option value="A3">A3 (แผ่นใหญ่)</option>
+                                        <option value="Letter">Letter</option>
+                                        <option value="Legal">Legal</option>
+                                    </select>
+                                </div>
+                                <div class="setting-group">
+                                    <label>🔄 แนวกระดาษ:</label>
+                                    <select id="orientation" onchange="updatePrintStyles()">
+                                        <option value="portrait">แนวตั้ง (Portrait)</option>
+                                        <option value="landscape">แนวนอน (Landscape)</option>
+                                    </select>
+                                </div>
+                                <div class="setting-group">
+                                    <label>📏 ขอบกระดาษ:</label>
+                                    <select id="margin" onchange="updatePrintStyles()">
+                                        <option value="15mm">ปกติ (15mm)</option>
+                                        <option value="10mm">แคบ (10mm)</option>
+                                        <option value="5mm">แคบมาก (5mm)</option>
+                                        <option value="20mm">กว้าง (20mm)</option>
+                                    </select>
+                                </div>
                             </div>
                         </div>
                         <div class="a4-container">
@@ -6901,10 +6976,44 @@
                 printWindow.document.close();
             };
 
+            // --- ฟังก์ชันดาวน์โหลดรายงานเป็น Excel ---
+            const handleExportExcel = () => {
+                let printContent = document.getElementById('print-area').innerHTML;
+                
+                // ลบภาพและไอคอนที่ไม่จำเป็นออกก่อนแปลงเพื่อความสะอาดของไฟล์
+                printContent = printContent.replace(/<img[^>]*>/gi,"");
+                printContent = printContent.replace(/<i class="fa[^>]*><\/i>/gi,"");
+
+                const html = `
+                    <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+                    <head>
+                        <meta charset="utf-8">
+                        <style>
+                            table { border-collapse: collapse; width: 100%; font-family: 'Sarabun', sans-serif, Tahoma; }
+                            th, td { border: 1px solid #000000; padding: 5px; text-align: center; vertical-align: middle; }
+                            th { background-color: #f0f0f0; font-weight: bold; }
+                        </style>
+                    </head>
+                    <body>
+                        ${printContent}
+                    </body>
+                    </html>
+                `;
+
+                const blob = new Blob([html], { type: 'application/vnd.ms-excel' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `รายงาน_${activeTab}_${new Date().getTime()}.xls`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            };
+
             const uniqueClasses = [...new Set((students || []).map(s => s.classLevel).filter(Boolean))].sort();
             const uniqueRooms = [...new Set((students || []).filter(s => s.classLevel === classFilter).map(s => s.room).filter(Boolean))].sort((a,b) => Number(a) - Number(b));
 
-            // ฟังก์ชันแปลงรูปแบบวันที่ให้เป็น DD/MM/YYYY (พ.ศ.) เสมอ เพื่อป้องกันบัคการเปรียบเทียบจาก Timezone
             const getBEStrSafe = (d) => {
                 const day = String(d.getDate()).padStart(2, '0');
                 const month = String(d.getMonth() + 1).padStart(2, '0');
@@ -6917,7 +7026,6 @@
                 if (!dateStr) return '';
                 let str = String(dateStr).trim();
                 
-                // จัดการกรณีเป็นเวลาสากลหรือรูปแบบ YYYY-MM-DD
                 if (str.includes('T') || str.match(/^\d{4}-\d{2}-\d{2}/)) {
                     try {
                         const d = new Date(str);
@@ -6952,6 +7060,7 @@
             };
 
             const isDateInRange = (rawDateStr) => {
+                if (dateFilter === 'all') return true; // เพิ่มให้ทะลุผ่านถ้าเลือกทั้งหมด
                 if (!rawDateStr) return false;
                 const dateStr = formatDisplayDate(rawDateStr);
                 const todayStr = getBEStrSafe(new Date());
@@ -6968,7 +7077,6 @@
                 return true;
             };
 
-            // แปลงรูปแบบ Date ให้ออกมาเหมือนกัน 100% ก่อนนำไปแสดงและคำนวณ
             const validTimeRecords = (timeRecords || []).filter(r => isDateInRange(r.date)).map(r => ({...r, date: formatDisplayDate(r.date)}));
             const validBehaviorRecords = (behaviorRecords || []).filter(r => isDateInRange(r.date)).map(r => ({...r, date: formatDisplayDate(r.date)}));
             const validActivityRecords = (activityRecords || []).filter(r => isDateInRange(r.date)).map(r => ({...r, date: formatDisplayDate(r.date)}));
@@ -6985,7 +7093,6 @@
             const outScans = validTimeRecords.filter(r => r.type === 'ออก').length;
             const lateScans = validTimeRecords.filter(r => r.statusStr === 'สาย').length;
             
-            // ข้อมูลการลา
             const sickLeaveCount = validLeaveRecords.filter(r => r.leaveType === 'ลาป่วย').length;
             const personalLeaveCount = validLeaveRecords.filter(r => r.leaveType === 'ลากิจ').length;
             const activityLeaveCount = validLeaveRecords.filter(r => r.leaveType === 'ไปกิจกรรม').length;
@@ -7014,7 +7121,6 @@
                 return baseScore + totalScore;
             };
 
-            // ประมวลผลข้อมูล InOut Status (รวมสถานะไม่บันทึก)
             let inOutReportData = [];
             if (activeTab === 'inout') {
                 if (statusFilter === 'ไม่บันทึกเข้า' || statusFilter === 'ไม่บันทึกออก') {
@@ -7027,7 +7133,6 @@
                         
                         (students || []).forEach(s => {
                             const scode = String(s.code).trim();
-                            // ไม่รวมนักเรียนที่แจ้งลา
                             if (!studentIds.has(scode) && !leaveStudentIds.has(scode)) {
                                 inOutReportData.push({ id: `miss_${targetType}_${s.code}_${d}`, date: d, studentId: s.code, name: s.name, room: `${s.classLevel}/${s.room}`, type: targetType, statusStr: statusFilter });
                             }
@@ -7038,14 +7143,10 @@
                 }
             }
 
-            // ดึงรายการพฤติกรรมที่ไม่ซ้ำกันมาทำเป็นตัวกรอง
             const uniqueBehaviorsForReport = [...new Set((behaviorRecords || []).map(b => b.behaviorName).filter(Boolean))].sort();
 
-            // ประมวลผลข้อมูล Behavior
             const behaviorReportData = validBehaviorRecords.filter(r => {
-                // เพิ่มเงื่อนไข กรองตามรายการพฤติกรรมที่เลือก
                 if (behaviorFilter && String(r.behaviorName).trim() !== String(behaviorFilter).trim()) return false;
-                
                 if(classFilter) {
                     const stu = (students || []).find(s => String(s.code).trim() === String(r.studentId).trim());
                     if(!stu || stu.classLevel !== classFilter) return false;
@@ -7054,7 +7155,6 @@
                 return true;
             });
 
-            // ประมวลผลข้อมูล Activity
             const activityReportData = validActivityRecords.filter(r => {
                 if(activityFilter && r.activityName !== activityFilter) return false;
                 if(classFilter) {
@@ -7065,7 +7165,6 @@
                 return true;
             });
 
-            // --- 1. แก้ไขการคำนวณประเมินผลพฤติกรรม (บังคับให้กรองตามที่ตั้งค่าไว้ 100%) ---
             const maxScore = (schoolConfig && schoolConfig.maxBehaviorScore) ? Number(schoolConfig.maxBehaviorScore) : 100;
             const evalCriteriaPercent = (schoolConfig && schoolConfig.evalCriteriaPercent !== undefined) ? Number(schoolConfig.evalCriteriaPercent) : 60;
             const evalSelectedBehaviors = schoolConfig && schoolConfig.evalSelectedBehaviors; 
@@ -7089,7 +7188,6 @@
 
                 sBehav.forEach(r => {
                     let shouldInclude = true;
-                    // ตรวจสอบอย่างเข้มงวด ถ้ารายการไม่ตรงกับที่ติ๊กไว้ในหน้าตั้งค่า จะไม่นำมาคำนวณ (ใช้ includes เพื่อรองรับวงเล็บท้ายชื่อ)
                     if (evalSelectedBehaviors && Array.isArray(evalSelectedBehaviors) && evalSelectedBehaviors.length > 0) {
                         shouldInclude = evalSelectedBehaviors.some(allowedName => r.behaviorName && String(r.behaviorName).includes(allowedName));
                     }
@@ -7115,12 +7213,13 @@
                 return true;
             });
 
-            // --- อัปเดตเมนูแท็บรายงาน (เพิ่ม สถิติขาดเรียน และ จัดอันดับ) ---
+            // --- เมนูแท็บทั้งหมด รวมถึง กิจกรรมชุมนุม ---
             const tabs = [
                 { id: 'stats', label: 'สถิติเข้า-ออก' },
                 { id: 'inout', label: 'สถานะเข้า-ออก' },
                 { id: 'behavior', label: 'รายงานพฤติกรรม' },
                 { id: 'activity', label: 'รายงานกิจกรรม' },
+                { id: 'club', label: 'กิจกรรมชุมนุม' }, // เพิ่มแท็บใหม่
                 { id: 'eval', label: 'ประเมินผลพฤติกรรม' },
                 { id: 'attendance', label: 'รายงานการเช็คชื่อ' },
                 { id: 'ms_risk', label: 'แนวโน้ม ม.ส.' },
@@ -7128,14 +7227,153 @@
                 { id: 'ranking', label: 'จัดอันดับนักเรียน' }
             ];
 
-            // --- ฟังก์ชันดึงข้อมูลเพื่อประมวลผล แนวโน้ม ม.ส. / สถิติขาด-หนี / จัดอันดับ ---
+            // --- ฟังก์ชันดึงข้อมูลกิจกรรมชุมนุม ---
+            const fetchClubData = async () => {
+                setIsFetchingClub(true);
+                try {
+                    let masterClubsMap = {};
+                    let openClubsList = [];
+
+                    // 1. ดึงข้อมูลหลักจาก "รายการชุมนุม" (ชี้ไปที่ ID ฐานข้อมูลหลัก DB1 โดยตรง เพื่อป้องกันชีทสูญหาย)
+                    try {
+                        const db1Id = '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48';
+                        const resMaster = await callGAS('getSchedules', { targetSheetId: db1Id, sheetName: 'รายการชุมนุม' });
+                        
+                        if (resMaster.status === 'success' && resMaster.data && resMaster.data.length > 0) {
+                            let headers = resMaster.data[0] || [];
+                            
+                            let actIdx = headers.findIndex(h => String(h).includes('รหัสกิจกรรม'));
+                            let nameIdx = headers.findIndex(h => String(h).includes('ชื่อ'));
+                            let teachIdx = headers.findIndex(h => String(h).includes('ครู'));
+                            let capIdx = headers.findIndex(h => String(h).includes('รับ'));
+                            let objIdx = headers.findIndex(h => String(h).includes('วัตถุประสงค์'));
+                            let eqIdx = headers.findIndex(h => String(h).includes('อุปกรณ์'));
+                            
+                            // Fallback index กรณีหาหัวตารางไม่เจอ
+                            if (actIdx === -1) actIdx = 1;
+                            if (nameIdx === -1) nameIdx = 2; 
+                            if (teachIdx === -1) teachIdx = 3; 
+                            if (capIdx === -1) capIdx = 4;   
+                            if (objIdx === -1) objIdx = 6;   
+                            if (eqIdx === -1) eqIdx = 8;     
+
+                            resMaster.data.forEach((r, idx) => {
+                                if (idx === 0) return;
+                                const clubName = String(r[nameIdx] || '').trim();
+                                if (clubName) {
+                                    const clubInfo = {
+                                        activityCode: String(r[actIdx] || '').trim(),
+                                        clubName: clubName,
+                                        teacher: String(r[teachIdx] || '').trim(),
+                                        capacity: String(r[capIdx] || '').trim() || '-',
+                                        objective: String(r[objIdx] || '').trim() || '-',
+                                        equipment: String(r[eqIdx] || '').trim() || '-'
+                                    };
+                                    masterClubsMap[clubName] = clubInfo;
+                                    openClubsList.push(clubInfo);
+                                }
+                            });
+                        }
+                    } catch(e) {
+                        console.log("ดึงข้อมูล 'รายการชุมนุม' ไม่สำเร็จ ระบบจะใช้ข้อมูลจากชีทลงทะเบียนแทน");
+                    }
+
+                    // 2. ดึงข้อมูลการลงทะเบียนจาก "ชุมนุม"
+                    const res = await callGAS('getSchedules', { targetSheetId: '1NBnP7z4VWTvGCwxdgaYse-MI2x6o0Jv4aL8pTt2Ja-A', sheetName: 'ชุมนุม' });
+                    
+                    if (res.status === 'success' && res.data) {
+                        let parsedData = [];
+                        let foundClubNames = new Set();
+
+                        res.data.forEach((r, idx) => {
+                            if (idx === 0 && (String(r[0]).includes('รหัส') || String(r[1]).includes('รหัส'))) return;
+                            
+                            let clubName = '';
+                            let studentId = '';
+                            let rowData = {};
+
+                            if (Array.isArray(r)) {
+                                clubName = String(r[2] || '').trim();
+                                studentId = String(r[3] || '').trim();
+                                rowData = {
+                                    studentId: studentId,    
+                                    studentName: String(r[4] || '').trim(),  
+                                    room: String(r[5] || '').trim(),         
+                                    regDate: String(r[6] || '').trim(),      
+                                    location: String(r[9] || '').trim()
+                                };
+                            } else {
+                                clubName = String(r.clubName || r['ชื่อชุมนุม'] || '').trim();
+                                studentId = String(r.studentId || r['เลขประจำตัว'] || '').trim();
+                                rowData = {
+                                    studentId: studentId,
+                                    studentName: r.studentName || r['ชื่อ-สกุล'] || '',
+                                    room: r.room || r['ชั้น/ห้อง'] || '',
+                                    regDate: r.regDate || r['วันที่ลงทะเบียน'] || '',
+                                    location: r.location || r['สถานที่เรียน'] || ''
+                                };
+                            }
+                            
+                            if (clubName && studentId) {
+                                foundClubNames.add(clubName);
+
+                                // นำข้อมูลจาก Master (รายการชุมนุม) มาเติมทับ เพื่อให้ข้อมูลเป็นมาตรฐานเดียวกัน
+                                const masterInfo = masterClubsMap[clubName] || {
+                                    activityCode: Array.isArray(r) ? String(r[1]||'') : (r.activityCode||''),
+                                    teacher: Array.isArray(r) ? String(r[7]||'') : (r.teacher||''),
+                                    capacity: '-',
+                                    objective: '-',
+                                    equipment: '-'
+                                };
+
+                                parsedData.push({
+                                    ...rowData,
+                                    clubName: clubName,
+                                    activityCode: masterInfo.activityCode,
+                                    teacher: masterInfo.teacher,
+                                    capacity: masterInfo.capacity,
+                                    objective: masterInfo.objective,
+                                    equipment: masterInfo.equipment
+                                });
+                            }
+                        });
+
+                        // 3. เติมชุมนุมที่ยังไม่มีคนลงทะเบียนให้แสดงในตาราง "กิจกรรมชุมนุมที่เปิด" อย่างครบถ้วน
+                        openClubsList.forEach(master => {
+                            if (!foundClubNames.has(master.clubName)) {
+                                parsedData.push({
+                                    activityCode: master.activityCode,
+                                    clubName: master.clubName,
+                                    studentId: '',
+                                    studentName: '',
+                                    room: '',
+                                    regDate: '',
+                                    teacher: master.teacher,
+                                    location: '',
+                                    objective: master.objective,
+                                    equipment: master.equipment,
+                                    capacity: master.capacity
+                                });
+                            }
+                        });
+
+                        setClubRecords(parsedData);
+                    } else {
+                        alert("ดึงข้อมูลการลงทะเบียนชุมนุมล้มเหลว");
+                    }
+                } catch (error) {
+                    console.error("Failed to fetch club data:", error);
+                    alert("เกิดข้อผิดพลาดในการดึงข้อมูลชุมนุม กรุณาลองใหม่อีกครั้ง");
+                }
+                setIsFetchingClub(false);
+            };
+
             const fetchMsRiskData = async () => {
                 setIsFetchingMsRisk(true);
                 setMsRiskData([]);
-                setRawRiskRecords([]); // เคลียร์ของเก่า
+                setRawRiskRecords([]);
 
                 try {
-                    // เรียกข้อมูลทั้งหมดเพื่อไม่ให้ติดปัญหา filter ห้องจากหลังบ้าน (สามารถดึง "ทุกชั้นเรียน" จาก LN1-LN6 ได้)
                     const res = await callGAS('getAttendanceRecord', {
                         targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48',
                         date: 'ALL',
@@ -7156,7 +7394,6 @@
                             return recordObj.status || '';
                         };
 
-                        // สร้างตัวแปร riskRecords เพื่อเก็บไว้ใช้กับรายงานสถิติอื่นๆ
                         const riskRecords = allRecords.filter(r => {
                             const st = findRealStatus(r);
                             return ['ขาด', 'ข', 'หนีเรียน', 'น'].includes(st);
@@ -7166,7 +7403,6 @@
                         const processedData = [];
                         const cleanStr = (val) => String(val || '').replace(/[\s\u200B-\u200D\uFEFF]/g, '');
                         
-                        // กรองนักเรียนตามฟอร์ม
                         const roomStudents = (students || []).filter(s => {
                             const matchClass = classFilter ? s.classLevel === classFilter : true;
                             const matchRoom = roomFilter ? s.room === roomFilter : true;
@@ -7177,7 +7413,6 @@
                             const targetCode = cleanStr(stu.code);
                             const targetCodeNum = (!isNaN(targetCode) && targetCode !== '') ? Number(targetCode) : null;
                             
-                            // ใช้ allRecords เพื่อจะได้นับคาบทั้งหมด (totalClasses) ที่เคยถูกเช็คชื่อสำหรับคนนี้ได้ครบถ้วน
                             const stuAllRecords = allRecords.filter(r => {
                                 if (r.studentId) {
                                     const rId = cleanStr(r.studentId);
@@ -7212,7 +7447,6 @@
                                 if (!subCode || subCode === 'undefined' || subCode === stu.code) subCode = 'ไม่ระบุรหัส';
                                 if (!subName || subName === 'undefined') subName = 'ไม่ระบุชื่อวิชา';
                                 
-                                // หาชื่อครูจากตารางสอนหากในข้อมูลเช็คชื่อไม่มี หรือเป็นระบบอัตโนมัติ
                                 if (!teacherName || teacherName === 'undefined' || teacherName === 'ไม่ระบุครูผู้สอน') {
                                     const scheduleMatch = (allSchedules || []).find(s => 
                                         String(s.subjectCode).trim() === subCode && 
@@ -7240,18 +7474,15 @@
                                 const data = riskMap[subKey];
                                 const notAttended = data.absent + data.skip;
 
-                                // คำนวณช่วงเวลาแบบเดียวกับหน้ารายงานการเช็คชื่อเป๊ะๆ 
-                                // (ดึงคาบเรียนต่อสัปดาห์จาก allSchedules)
                                 const periodsPerWeek = (allSchedules || []).filter(s => 
                                     String(s.subjectCode).trim() === String(data.code).trim() && 
                                     String(s.room).replace(/[\sม\.]/g, '') === String(`${stu.classLevel}/${stu.room}`).replace(/[\sม\.]/g, '')
                                 ).length || 1;
                                 
-                                const totalRequired = periodsPerWeek * 20; // จำนวนคาบเต็ม 1 เทอม
+                                const totalRequired = periodsPerWeek * 20; 
                                 const attended = totalRequired - notAttended;
                                 const percent = totalRequired > 0 ? ((attended / totalRequired) * 100) : 0;
                                 
-                                // เช็คเงื่อนไข: เคยเช็คชื่อมาแล้วมากกว่า 3 คาบขึ้นไป และร้อยละต่ำกว่าเกณฑ์
                                 if (data.totalClasses > 3 && percent < msPercentThreshold) {
                                     riskSubjects.push({ 
                                         code: data.code, 
@@ -7281,70 +7512,51 @@
                 setIsFetchingMsRisk(false);
             };
 
-            // --- ประมวลผลข้อมูลร่วมสำหรับ (สถิติขาด/หนีเรียน และ จัดอันดับ) ---
+            // 👇 วางทับบล็อก const combinedStatsData = ... เดิมทั้งหมด 👇
             const combinedStatsData = (students || []).filter(s => {
                 const matchClass = classFilter ? s.classLevel === classFilter : true;
                 const matchRoom = roomFilter ? s.room === roomFilter : true;
                 return matchClass && matchRoom;
             }).map(stu => {
-                const cleanStr = (val) => String(val || '').replace(/[\s\u200B-\u200D\uFEFF]/g, '');
-                const targetCode = cleanStr(stu.code);
-                const targetCodeNum = (!isNaN(targetCode) && targetCode !== '') ? Number(targetCode) : null;
+                const targetCode = String(stu.code).trim();
+                const fullRoom = stu.classLevel && stu.room ? `${stu.classLevel}/${stu.room}` : 'ไม่ระบุ';
                 
-                // คำนวณยอด ขาด/หนี จากเช็คชื่อรายวิชา
+                // 1. สถิติขาด/หนีเรียน (ดึงจากข้อมูลที่จับคู่มาเป๊ะๆ)
                 const riskRecs = rawRiskRecords.filter(r => {
-                    if (r.studentId) {
-                        const rId = cleanStr(r.studentId);
-                        if (rId === targetCode || (targetCodeNum !== null && !isNaN(rId) && Number(rId) === targetCodeNum)) return true;
-                    }
-                    for (let key in r) {
-                        if (key === 'date' || key === 'id' || key === 'period') continue;
-                        const val = cleanStr(r[key]);
-                        if (val === targetCode) return true;
-                        if (targetCodeNum !== null && !isNaN(val) && Number(val) === targetCodeNum) return true;
-                    }
-                    return false;
+                    const recDate = String(r.date || '').trim();
+                    if (dateFilter !== 'all' && !isDateInRange(recDate)) return false;
+                    
+                    const rId = String(r.studentId || '').trim();
+                    return rId === targetCode || (!isNaN(rId) && Number(rId) === Number(targetCode));
                 });
                 
                 let absent = 0, skip = 0;
                 riskRecs.forEach(r => {
-                    const validStatuses = ['มา', 'สาย', 'ขาด', 'ลาป่วย', 'ลากิจ', 'หนีเรียน', 'ไปกิจกรรม', '✓', 'ส', 'ข', 'ลป', 'ลก', 'น', 'ก'];
-                    let status = String(r.status).trim();
-                    if (!validStatuses.includes(status)) {
-                        for (let key in r) {
-                            if (key === 'date' || key === 'id' || key === 'period') continue;
-                            const val = String(r[key]).trim();
-                            if (validStatuses.includes(val)) { status = val; break; }
-                        }
-                    }
-                    if (status === 'ขาด' || status === 'ข') absent++;
-                    if (status === 'หนีเรียน' || status === 'น') skip++;
+                    const status = String(r.status || '').trim();
+                    if (['ขาด', 'ข'].includes(status)) absent++;
+                    if (['หนีเรียน', 'น'].includes(status)) skip++;
                 });
 
-                // คำนวณยอด เพิ่ม/หักคะแนน จากพฤติกรรม (ช่วงเวลาตาม Date Filter)
+                // 2. สถิติพฤติกรรม (คำนวณแยกออกมาอย่างชัดเจน)
                 const behavRecs = validBehaviorRecords.filter(r => {
-                     const rId = cleanStr(r.studentId);
-                     return rId === targetCode || (targetCodeNum !== null && !isNaN(rId) && Number(rId) === targetCodeNum);
+                    const rId = String(r.studentId || '').trim();
+                    return rId === targetCode || (!isNaN(rId) && Number(rId) === Number(targetCode));
                 });
                 
                 let pos = 0, neg = 0;
                 behavRecs.forEach(r => {
-                    const score = Number(r.score);
+                    const score = Number(r.score || 0);
                     if (r.type === 'บวก' || score > 0) pos += Math.abs(score);
                     else neg += Math.abs(score);
                 });
 
-                // คำนวณคะแนนคงเหลือรวมทั้งหมด (คะแนนปัจจุบันจริงๆ ไม่สนวันที่กรอง)
-                const allBehavRecs = (behaviorRecords || []).filter(r => {
-                     const rId = cleanStr(r.studentId);
-                     return rId === targetCode || (targetCodeNum !== null && !isNaN(rId) && Number(rId) === targetCodeNum);
-                });
-                const currentRemainingScore = ((schoolConfig && schoolConfig.maxBehaviorScore) ? Number(schoolConfig.maxBehaviorScore) : 100) + allBehavRecs.reduce((sum, r) => sum + Number(r.score), 0);
+                const baseScore = (schoolConfig && schoolConfig.maxBehaviorScore) ? Number(schoolConfig.maxBehaviorScore) : 100;
+                const currentRemainingScore = baseScore + pos - neg;
 
-                return { ...stu, absent, skip, pos, neg, totalAbsSkip: absent + skip, currentRemainingScore };
+                return { ...stu, fullRoom, absent, skip, pos, neg, totalAbsSkip: absent + skip, currentRemainingScore };
             });
-
-            // จัดเรียงข้อมูลสำหรับการจัดอันดับและซ่อนนักเรียนที่ไม่มีประวัติ
+            // 👆 ---------------------------------------------------- 👆
+            
             const sortedRankingStats = [...combinedStatsData].filter(s => {
                 if (rankingSortBy === 'absent_desc') return s.absent > 0;
                 if (rankingSortBy === 'skip_desc') return s.skip > 0;
@@ -7368,7 +7580,10 @@
             const groupDataByRoom = (dataArray) => {
                 const grouped = {};
                 dataArray.forEach(item => {
-                    const r = item.room || 'ไม่ระบุ';
+                    // Normalize room
+                    let r = String(item.room || 'ไม่ระบุ').trim();
+                    if (!r.startsWith('ม.') && r !== 'ไม่ระบุ') r = `ม.${r}`;
+                    
                     if (!grouped[r]) grouped[r] = [];
                     grouped[r].push(item);
                 });
@@ -7387,11 +7602,27 @@
                 return { grouped, sortedKeys };
             };
 
+            const groupDataByClubName = (dataArray) => {
+                const grouped = {};
+                dataArray.forEach(item => {
+                    const key = item.clubName || 'ไม่ระบุชุมนุม';
+                    if (!grouped[key]) grouped[key] = { 
+                        clubName: key, 
+                        activityCode: item.activityCode, 
+                        teacher: item.teacher, 
+                        records: [] 
+                    };
+                    grouped[key].records.push(item);
+                });
+                const sortedKeys = Object.keys(grouped).sort((a,b) => a.localeCompare(b));
+                return { grouped, sortedKeys };
+            };
+
             const getAdvisorName = (roomStr) => {
                 if (!teachers || !teachers.length || !roomStr || roomStr === 'ไม่ระบุ') return 'ไม่ระบุ';
-                const parts = roomStr.split('/');
+                const parts = String(roomStr).replace('ม.', '').split('/');
                 if (parts.length === 2) {
-                    const cLevel = parts[0].trim();
+                    const cLevel = `ม.${parts[0].trim()}`;
                     const cRoom = parts[1].trim();
                     
                     const matchingTeachers = teachers.filter(t => 
@@ -7412,6 +7643,65 @@
             const actGroup = groupDataByRoom(activityReportData);
             const evalGroup = groupDataByRoom(evalReportData);
             const msRiskGroup = groupDataByRoom(msRiskData);
+
+            // --- การจัดการข้อมูลกลุ่ม กิจกรรมชุมนุม ---
+            const uniqueClubs = [...new Set(clubRecords.map(r => r.clubName).filter(Boolean))].sort();
+            
+            // กรองข้อมูลชุมนุมกรณีเลือก by_room
+            const filteredClubByRoom = clubRecords.filter(r => {
+                if (!r.studentId) return false; // กรองบรรทัดจำลองออก ป้องกันการนับนักเรียนเกินจริง
+                const cLvl = classFilter ? classFilter.replace(/[^0-9]/g, '') : '';
+                const cRm = roomFilter ? roomFilter.replace(/[^0-9]/g, '') : '';
+                const rStr = String(r.room).replace(/[^0-9\/]/g, ''); 
+                const [rLvl, rRm] = rStr.split('/');
+                if (cLvl && cRm) return rLvl === cLvl && rRm === cRm;
+                if (cLvl) return rLvl === cLvl;
+                return true;
+            });
+            const clubGroupedByRoom = groupDataByRoom(filteredClubByRoom);
+
+            // กรองข้อมูลชุมนุมกรณีเลือก by_club หรือ all_reg
+            const filteredClubByClubName = clubRecords.filter(r => {
+                if (!r.studentId) return false; // กรองบรรทัดจำลองออก ป้องกันการนับนักเรียนเกินจริง
+                if (clubReportType === 'by_club' && clubFilter && r.clubName !== clubFilter) return false;
+                return true;
+            });
+            const clubGroupedByName = groupDataByClubName(filteredClubByClubName);
+
+            // นักเรียนที่ยังไม่ลงทะเบียน (เทียบระหว่างนักเรียนทั้งหมดกับรหัสนักเรียนใน clubRecords)
+            const registeredIds = new Set(clubRecords.filter(r => r.studentId).map(r => String(r.studentId).replace(/[^0-9]/g, '')));
+            const unregStudents = (students || []).filter(s => {
+                const code = String(s.code).replace(/[^0-9]/g, '');
+                if (registeredIds.has(code)) return false;
+                if (classFilter && s.classLevel !== classFilter) return false;
+                if (roomFilter && s.room !== roomFilter) return false;
+                return true;
+            }).map(s => ({...s, room: s.classLevel && s.room ? `${s.classLevel}/${s.room}` : 'ไม่ระบุ'}));
+            const unregGroup = groupDataByRoom(unregStudents);
+
+            // จัดเตรียมข้อมูลสำหรับ รายการกิจกรรมชุมนุมที่เปิด (open_clubs)
+            const openClubsSummary = [];
+            if (clubReportType === 'open_clubs') {
+                const grouped = {};
+                clubRecords.forEach(r => {
+                    const key = r.clubName;
+                    if (!grouped[key]) {
+                        grouped[key] = {
+                            activityCode: r.activityCode,
+                            clubName: r.clubName,
+                            teacher: r.teacher,
+                            capacity: r.capacity || '-',
+                            registeredCount: 0,
+                            objective: r.objective,
+                            equipment: r.equipment
+                        };
+                    }
+                    if (r.studentId) {
+                        grouped[key].registeredCount++;
+                    }
+                });
+                openClubsSummary.push(...Object.values(grouped).sort((a,b) => a.clubName.localeCompare(b.clubName)));
+            }
 
             const [mySchedules, setMySchedules] = useState([]);
             const [attSelectedKey, setAttSelectedKey] = useState('');
@@ -7525,7 +7815,6 @@
                 return acc;
             }, []);
 
-            // แก้ไข: สร้างตัวแปรกลุ่มสาระการเรียนรู้สำหรับใช้ในหน้ารายงาน
             const standardDepts = ['วิทยาศาสตร์และเทคโนโลยี', 'คณิตศาสตร์', 'ภาษาไทย', 'ภาษาต่างประเทศ', 'สังคมศึกษา ศาสนาและวัฒนธรรม', 'การงานอาชีพ', 'สุขศึกษาและพลศึกษา', 'ศิลปะ'];
             const uniqueDepts = [...new Set([...standardDepts, ...(teachers || []).map(t => t.department).filter(Boolean)])].sort();
             
@@ -7746,13 +8035,14 @@
                         </div>
                         
                         <div className="p-6 bg-white border-b">
-                            {activeTab !== 'attendance' && (
+                            {activeTab !== 'attendance' && activeTab !== 'club' && (
                                 <React.Fragment>
                                     <h3 className="font-bold text-gray-700 mb-3"><i className="fa-solid fa-filter mr-2"></i> ตัวกรองข้อมูลสำหรับรายงาน</h3>
                                     <div className="flex flex-wrap gap-4 items-end">
                                         <div>
                                             <label className="block text-sm text-gray-600 mb-1">ช่วงวันที่</label>
                                             <select value={dateFilter} onChange={e=>setDateFilter(e.target.value)} className="border rounded p-2 focus:ring-2 focus:ring-ns-blue outline-none text-sm">
+                                                <option value="all">ทั้งหมด (All Time)</option>
                                                 <option value="today">วันนี้</option>
                                                 <option value="yesterday">เมื่อวาน</option>
                                                 <option value="custom">ระบุช่วงวันที่</option>
@@ -7823,7 +8113,6 @@
                                             </div>
                                         )}
 
-                                        {/* เพิ่มตัวกรอง รายการพฤติกรรม */}
                                         {activeTab === 'behavior' && (
                                             <div className="animate-[fadeIn_0.3s_ease-out]">
                                                 <label className="block text-sm text-gray-600 mb-1">รายการพฤติกรรม</label>
@@ -7855,9 +8144,80 @@
                                             </div>
                                         )}
 
-                                        <div className="ml-auto mt-2 md:mt-0 w-full md:w-auto">
-                                            <button onClick={handlePrintReport} className="w-full bg-gray-800 text-white px-6 py-2 rounded-lg shadow hover:bg-black transition flex items-center justify-center font-bold">
+                                        <div className="ml-auto mt-2 md:mt-0 w-full md:w-auto flex flex-wrap gap-2">
+                                            <button onClick={handlePrintReport} className="flex-1 md:flex-none bg-gray-800 text-white px-4 py-2 rounded-lg shadow hover:bg-black transition flex items-center justify-center font-bold">
                                                 <i className="fa-solid fa-print mr-2"></i> พิมพ์ / PDF
+                                            </button>
+                                            <button onClick={handleExportExcel} className="flex-1 md:flex-none bg-green-600 text-white px-4 py-2 rounded-lg shadow hover:bg-green-700 transition flex items-center justify-center font-bold">
+                                                <i className="fa-solid fa-file-excel mr-2"></i> โหลด Excel
+                                            </button>
+                                        </div>
+                                    </div>
+                                </React.Fragment>
+                            )}
+
+                            {/* ตัวกรองสำหรับ กิจกรรมชุมนุม */}
+                            {activeTab === 'club' && (
+                                <React.Fragment>
+                                    <h3 className="font-bold text-gray-700 mb-3"><i className="fa-solid fa-filter mr-2"></i> ตัวกรองข้อมูลกิจกรรมชุมนุม</h3>
+                                    <div className="flex flex-wrap gap-4 items-end">
+                                        <div>
+                                            <label className="block text-sm text-gray-600 mb-1">ประเภทรายงานชุมนุม</label>
+                                            <select value={clubReportType} onChange={e => {setClubReportType(e.target.value); setClubFilter(''); setClassFilter(''); setRoomFilter('');}} className="border rounded p-2 text-sm bg-pink-50">
+                                                <option value="by_room">รายงานตามชั้น/ห้อง</option>
+                                                <option value="by_club">รายงานตามชื่อชุมนุม</option>
+                                                <option value="all_reg">รายงานการลงทะเบียนทั้งหมด</option>
+                                                <option value="open_clubs">รายการกิจกรรมชุมนุมที่เปิด</option>
+                                                <option value="unreg">รายงานนักเรียนที่ยังไม่ลงทะเบียน</option>
+                                            </select>
+                                        </div>
+
+                                        {['by_room', 'unreg'].includes(clubReportType) && (
+                                            <React.Fragment>
+                                                <div>
+                                                    <label className="block text-sm text-gray-600 mb-1">ชั้นเรียน</label>
+                                                    <select value={classFilter} onChange={e=>{setClassFilter(e.target.value); setRoomFilter('');}} className="border rounded p-2 text-sm bg-blue-50">
+                                                        <option value="">ทุกชั้นเรียน</option>
+                                                        {uniqueClasses.map(c => <option key={c} value={c}>{c}</option>)}
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-sm text-gray-600 mb-1">ห้อง</label>
+                                                    <select value={roomFilter} onChange={e=>setRoomFilter(e.target.value)} className="border rounded p-2 text-sm bg-blue-50" disabled={!classFilter}>
+                                                        <option value="">ทุกห้อง</option>
+                                                        {uniqueRooms.map(r => <option key={r} value={r}>{r}</option>)}
+                                                    </select>
+                                                </div>
+                                            </React.Fragment>
+                                        )}
+
+                                        {clubReportType === 'by_club' && (
+                                            <div>
+                                                <label className="block text-sm text-gray-600 mb-1">ชื่อชุมนุม (สามารถค้นหาได้)</label>
+                                                <select value={clubFilter} onChange={e=>setClubFilter(e.target.value)} className="border rounded p-2 text-sm bg-pink-50 max-w-[250px] truncate">
+                                                    <option value="">-- เลือกชุมนุมทั้งหมด --</option>
+                                                    {uniqueClubs.map((c, idx) => <option key={idx} value={c}>{c}</option>)}
+                                                </select>
+                                            </div>
+                                        )}
+
+                                        <div>
+                                            <label className="block text-sm text-gray-600 mb-1">&nbsp;</label>
+                                            <button 
+                                                onClick={fetchClubData} 
+                                                disabled={isFetchingClub}
+                                                className="bg-pink-600 text-white px-4 py-2 rounded-lg shadow hover:bg-pink-700 transition disabled:opacity-50 font-bold flex items-center"
+                                            >
+                                                {isFetchingClub ? <i className="fa-solid fa-spinner fa-spin mr-2"></i> : <i className="fa-solid fa-cloud-arrow-down mr-2"></i>} ดึงข้อมูลจากชีทชุมนุม
+                                            </button>
+                                        </div>
+
+                                        <div className="ml-auto mt-2 md:mt-0 w-full md:w-auto flex flex-wrap gap-2">
+                                            <button onClick={handlePrintReport} className="flex-1 md:flex-none bg-gray-800 text-white px-4 py-2 rounded-lg shadow hover:bg-black transition flex items-center justify-center font-bold">
+                                                <i className="fa-solid fa-print mr-2"></i> พิมพ์ / PDF
+                                            </button>
+                                            <button onClick={handleExportExcel} className="flex-1 md:flex-none bg-green-600 text-white px-4 py-2 rounded-lg shadow hover:bg-green-700 transition flex items-center justify-center font-bold">
+                                                <i className="fa-solid fa-file-excel mr-2"></i> โหลด Excel
                                             </button>
                                         </div>
                                     </div>
@@ -7910,9 +8270,12 @@
                                         )}
                                         <div className="flex justify-between items-center mt-2 border-t pt-4">
                                             <div>{isFetchingAtt && <span className="text-ns-blue animate-pulse"><i className="fa-solid fa-spinner fa-spin mr-2"></i>กำลังดึงข้อมูล...</span>}</div>
-                                            <div className="ml-auto">
-                                                <button onClick={handlePrintReport} className="bg-gray-800 text-white px-6 py-2 rounded-lg shadow hover:bg-black transition flex items-center font-bold">
-                                                    <i className="fa-solid fa-print mr-2"></i> พิมพ์รายงาน / PDF
+                                            <div className="ml-auto flex gap-2">
+                                                <button onClick={handlePrintReport} className="bg-gray-800 text-white px-4 py-2 rounded-lg shadow hover:bg-black transition flex items-center font-bold">
+                                                    <i className="fa-solid fa-print mr-2"></i> พิมพ์ / PDF
+                                                </button>
+                                                <button onClick={handleExportExcel} className="bg-green-600 text-white px-4 py-2 rounded-lg shadow hover:bg-green-700 transition flex items-center font-bold">
+                                                    <i className="fa-solid fa-file-excel mr-2"></i> โหลด Excel
                                                 </button>
                                             </div>
                                         </div>
@@ -7928,10 +8291,19 @@
                             <div className="text-left print-title-text">
                                 <h2 className="text-2xl md:text-3xl font-bold text-gray-900 mb-1">{schoolConfig ? schoolConfig.name : 'โรงเรียนนราสิกขาลัย'}</h2>
                                 <h3 className="text-xl md:text-2xl font-bold text-ns-blue mb-1">
-                                    {(tabs.find(t => t.id === activeTab) || {}).label}
+                                    {(tabs.find(t => t.id === activeTab) || {}).label} 
+                                    {activeTab === 'club' && ` - ${
+                                        clubReportType === 'by_room' ? 'รายชื่อแยกตามชั้น/ห้อง' :
+                                        clubReportType === 'by_club' ? 'รายชื่อแยกตามชื่อชุมนุม' :
+                                        clubReportType === 'all_reg' ? 'รายงานการลงทะเบียนทั้งหมด' :
+                                        clubReportType === 'open_clubs' ? 'รายการกิจกรรมชุมนุมที่เปิด' : 'รายงานนักเรียนที่ยังไม่ลงทะเบียน'
+                                    }`}
                                 </h3>
                                 <p className="text-sm md:text-base text-gray-600">
-                                    ข้อมูลระหว่างวันที่: {dateFilter === 'today' ? getBEStrSafe(new Date()) : dateFilter === 'yesterday' ? getBEStrSafe(new Date(Date.now() - 86400000)) : `${customStart ? getBEStrSafe(new Date(customStart)) : '-'} ถึง ${customEnd ? getBEStrSafe(new Date(customEnd)) : '-'}`}
+                                    {activeTab === 'club' 
+                                        ? `ข้อมูล ณ วันที่ ${getBEStrSafe(new Date())}`
+                                        : `ข้อมูลระหว่างวันที่: ${dateFilter === 'today' ? getBEStrSafe(new Date()) : dateFilter === 'yesterday' ? getBEStrSafe(new Date(Date.now() - 86400000)) : `${customStart ? (customStart.includes('/') ? customStart : getBEStrSafe(new Date(customStart))) : '-'} ถึง ${customEnd ? (customEnd.includes('/') ? customEnd : getBEStrSafe(new Date(customEnd))) : '-'}`}`
+                                    }
                                 </p>
                             </div>
                         </div>
@@ -8008,6 +8380,231 @@
                                     )) : <tr><td colSpan="7" className="p-4 text-center text-gray-400">ไม่พบข้อมูล</td></tr>}
                                 </tbody>
                             </table>
+                        )}
+
+                        {/* --- ตารางรายงาน กิจกรรมชุมนุม --- */}
+                        {activeTab === 'club' && (
+                            <div className="overflow-x-auto">
+                                {clubRecords.length === 0 && !isFetchingClub ? (
+                                    <div className="text-center p-10 bg-gray-50 rounded-xl border border-gray-200">
+                                        <i className="fa-solid fa-users-rectangle text-5xl text-gray-300 mb-3"></i>
+                                        <p className="text-gray-500">กรุณากดปุ่ม <span className="font-bold text-pink-600">ดึงข้อมูลจากชีทชุมนุม</span> เพื่อแสดงรายงาน</p>
+                                    </div>
+                                ) : (
+                                    <React.Fragment>
+                                        {/* รายการกิจกรรมชุมนุมที่เปิด */}
+                                        {clubReportType === 'open_clubs' && (
+                                            <table className="w-full text-sm text-left border-collapse border border-gray-300">
+                                                <thead className="bg-gray-100 text-gray-800">
+                                                    <tr>
+                                                        <th className="p-2 border border-gray-300 text-center w-12">ลำดับ</th>
+                                                        <th className="p-2 border border-gray-300 text-center">รหัสกิจกรรม</th>
+                                                        <th className="p-2 border border-gray-300 text-center wrap-text-long">ชื่อชุมนุม</th>
+                                                        <th className="p-2 border border-gray-300 text-center">ครูประจำวิชา</th>
+                                                        <th className="p-2 border border-gray-300 text-center w-24">จำนวนที่รับ</th>
+                                                        <th className="p-2 border border-gray-300 text-center w-24">จำนวน<br/>ผู้ลงทะเบียน</th>
+                                                        <th className="p-2 border border-gray-300 text-center min-w-[150px] wrap-objective">วัตถุประสงค์</th>
+                                                        <th className="p-2 border border-gray-300 text-center min-w-[150px] wrap-text-long">อุปกรณ์ที่ต้องเตรียม</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {openClubsSummary.length > 0 ? openClubsSummary.map((club, i) => (
+                                                        <tr key={i} className="border-b bg-white hover:bg-pink-50 transition">
+                                                            <td className="p-2 border border-gray-300 text-center text-gray-500">{i+1}</td>
+                                                            <td className="p-2 border border-gray-300 text-center font-medium text-gray-700">{club.activityCode}</td>
+                                                            <td className="p-2 border border-gray-300 text-left font-bold text-ns-blue whitespace-pre-wrap wrap-text-long print:whitespace-normal">{club.clubName}</td>
+                                                            <td className="p-2 border border-gray-300 text-center text-gray-600">{club.teacher}</td>
+                                                            <td className="p-2 border border-gray-300 text-center font-medium text-gray-600">{club.capacity}</td>
+                                                            <td className="p-2 border border-gray-300 text-center font-bold text-pink-600 bg-pink-50 print:bg-transparent">{club.registeredCount}</td>
+                                                            <td className="p-2 border border-gray-300 text-left text-xs text-gray-600 whitespace-pre-wrap wrap-objective print:whitespace-normal">{club.objective || '-'}</td>
+                                                            <td className="p-2 border border-gray-300 text-left text-xs text-gray-600 whitespace-pre-wrap wrap-text-long print:whitespace-normal">{club.equipment || '-'}</td>
+                                                        </tr>
+                                                    )) : <tr><td colSpan="8" className="p-4 text-center text-gray-400">ไม่พบรายการกิจกรรมชุมนุม</td></tr>}
+                                                </tbody>
+                                            </table>
+                                        )}
+
+                                        {/* รายงานตามชั้น/ห้อง */}
+                                        {clubReportType === 'by_room' && (
+                                            <table className="w-full text-sm text-left border-collapse border border-gray-300">
+                                                <thead className="bg-gray-100">
+                                                    <tr>
+                                                        <th className="p-2 border border-gray-300 text-center w-16">ลำดับ</th>
+                                                        <th className="p-2 border border-gray-300 text-center">เลขประจำตัว</th>
+                                                        <th className="p-2 border border-gray-300 text-center">ชื่อ-สกุล</th>
+                                                        <th className="p-2 border border-gray-300 text-center">ชั้น/ห้อง</th>
+                                                        <th className="p-2 border border-gray-300 text-center">รหัสกิจกรรม</th>
+                                                        <th className="p-2 border border-gray-300 text-center">ชื่อชุมนุม</th>
+                                                        <th className="p-2 border border-gray-300 text-center">ครูผู้สอน</th>
+                                                        <th className="p-2 border border-gray-300 text-center">สถานที่</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {clubGroupedByRoom.sortedKeys.length > 0 ? clubGroupedByRoom.sortedKeys.map(roomKey => (
+                                                        <React.Fragment key={roomKey}>
+                                                            <tr className="bg-pink-100/50">
+                                                                <td colSpan="8" className="p-2 border font-bold text-pink-700">
+                                                                    ชั้น/ห้อง: {roomKey} <span className="text-gray-500 font-normal ml-2">| ครูที่ปรึกษา: {getAdvisorName(roomKey)}</span>
+                                                                </td>
+                                                            </tr>
+                                                            {clubGroupedByRoom.grouped[roomKey].map((r,i) => (
+                                                                <tr key={i} className="border-b bg-white hover:bg-gray-50">
+                                                                    <td className="p-2 border text-center text-gray-500">{i+1}</td>
+                                                                    <td className="p-2 border text-center">{r.studentId}</td>
+                                                                    <td className="p-2 border text-left font-medium">{r.studentName}</td>
+                                                                    <td className="p-2 border text-center">{r.room}</td>
+                                                                    <td className="p-2 border text-center">{r.activityCode}</td>
+                                                                    <td className="p-2 border text-left">{r.clubName}</td>
+                                                                    <td className="p-2 border text-center text-gray-600">{r.teacher}</td>
+                                                                    <td className="p-2 border text-center text-gray-600">{r.location}</td>
+                                                                </tr>
+                                                            ))}
+                                                        </React.Fragment>
+                                                    )) : <tr><td colSpan="8" className="p-4 text-center text-gray-400">ไม่พบข้อมูล</td></tr>}
+                                                </tbody>
+                                            </table>
+                                        )}
+
+                                        {/* รายงานตามชื่อชุมนุม */}
+                                        {clubReportType === 'by_club' && (
+                                            <table className="w-full text-sm text-left border-collapse border border-gray-300">
+                                                <thead className="bg-gray-100">
+                                                    <tr>
+                                                        <th className="p-2 border border-gray-300 text-center w-16">ลำดับ</th>
+                                                        <th className="p-2 border border-gray-300 text-center">เลขประจำตัว</th>
+                                                        <th className="p-2 border border-gray-300 text-center">ชื่อ-สกุล</th>
+                                                        <th className="p-2 border border-gray-300 text-center">ชั้น/ห้อง</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {clubGroupedByName.sortedKeys.length > 0 ? clubGroupedByName.sortedKeys.map(clubName => {
+                                                        const groupData = clubGroupedByName.grouped[clubName];
+                                                        return (
+                                                            <React.Fragment key={clubName}>
+                                                                <tr className="bg-pink-100/50">
+                                                                    <td colSpan="4" className="p-2 border font-bold text-pink-700">
+                                                                        {groupData.activityCode} - {clubName} <span className="text-gray-600 font-normal ml-2">| ครูประจำวิชา: {groupData.teacher || 'ไม่ระบุ'}</span> <span className="text-blue-600 font-normal ml-2">({groupData.records.length} คน)</span>
+                                                                    </td>
+                                                                </tr>
+                                                                {groupData.records.map((r,i) => (
+                                                                    <tr key={i} className="border-b bg-white hover:bg-gray-50">
+                                                                        <td className="p-2 border text-center text-gray-500">{i+1}</td>
+                                                                        <td className="p-2 border text-center">{r.studentId}</td>
+                                                                        <td className="p-2 border text-left font-medium">{r.studentName}</td>
+                                                                        <td className="p-2 border text-center">{r.room}</td>
+                                                                    </tr>
+                                                                ))}
+                                                            </React.Fragment>
+                                                        )
+                                                    }) : <tr><td colSpan="4" className="p-4 text-center text-gray-400">ไม่พบข้อมูลชุมนุม</td></tr>}
+                                                </tbody>
+                                            </table>
+                                        )}
+
+                                        {/* รายงานการลงทะเบียนทั้งหมด */}
+                                        {clubReportType === 'all_reg' && (
+                                            <table className="w-full text-sm text-left border-collapse border border-gray-300">
+                                                <thead className="bg-gray-100">
+                                                    <tr>
+                                                        <th className="p-2 border border-gray-300 text-center w-16">ลำดับ</th>
+                                                        <th className="p-2 border border-gray-300 text-center">เลขประจำตัว</th>
+                                                        <th className="p-2 border border-gray-300 text-center">ชื่อ-สกุล</th>
+                                                        <th className="p-2 border border-gray-300 text-center">ชั้น/ห้อง</th>
+                                                        <th className="p-2 border border-gray-300 text-center">รหัสกิจกรรม</th>
+                                                        <th className="p-2 border border-gray-300 text-center">ชื่อชุมนุม</th>
+                                                        <th className="p-2 border border-gray-300 text-center">ครูผู้สอน</th>
+                                                        <th className="p-2 border border-gray-300 text-center">สถานที่</th>
+                                                        <th className="p-2 border border-gray-300 text-center">วันที่ลงทะเบียน</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {clubGroupedByName.sortedKeys.length > 0 ? clubGroupedByName.sortedKeys.map(clubName => {
+                                                        const groupData = clubGroupedByName.grouped[clubName];
+                                                        return (
+                                                            <React.Fragment key={clubName}>
+                                                                <tr className="bg-pink-100/50">
+                                                                    <td colSpan="9" className="p-2 border font-bold text-pink-700">
+                                                                        {clubName} <span className="text-gray-600 font-normal ml-2">| สรุปจำนวนผู้ลงทะเบียน: {groupData.records.length} คน</span>
+                                                                    </td>
+                                                                </tr>
+                                                                {groupData.records.length > 0 ? groupData.records.map((r,i) => (
+                                                                    <tr key={i} className="border-b bg-white hover:bg-gray-50">
+                                                                        <td className="p-2 border text-center text-gray-500">{i+1}</td>
+                                                                        <td className="p-2 border text-center">{r.studentId}</td>
+                                                                        <td className="p-2 border text-left font-medium">{r.studentName}</td>
+                                                                        <td className="p-2 border text-center">{r.room}</td>
+                                                                        <td className="p-2 border text-center">{r.activityCode}</td>
+                                                                        <td className="p-2 border text-left">{r.clubName}</td>
+                                                                        <td className="p-2 border text-center text-gray-600">{r.teacher}</td>
+                                                                        <td className="p-2 border text-center text-gray-600">{r.location}</td>
+                                                                        <td className="p-2 border text-center text-gray-500">{r.regDate}</td>
+                                                                    </tr>
+                                                                )) : (
+                                                                    <tr className="border-b bg-white">
+                                                                        <td colSpan="9" className="p-4 text-center text-gray-400">ยังไม่มีผู้ลงทะเบียนในชุมนุมนี้</td>
+                                                                    </tr>
+                                                                )}
+                                                            </React.Fragment>
+                                                        )
+                                                    }) : <tr><td colSpan="9" className="p-4 text-center text-gray-400">ไม่พบข้อมูลการลงทะเบียน</td></tr>}
+                                                </tbody>
+                                            </table>
+                                        )}
+
+                                        {/* รายงานนักเรียนที่ยังไม่ลงทะเบียน */}
+                                        {clubReportType === 'unreg' && (
+                                            <table className="w-full text-sm text-left border-collapse border border-gray-300">
+                                                <thead className="bg-gray-100">
+                                                    <tr>
+                                                        <th className="p-2 border border-gray-300 text-center w-16">ลำดับ</th>
+                                                        <th className="p-2 border border-gray-300 text-center">เลขประจำตัว</th>
+                                                        <th className="p-2 border border-gray-300 text-center">ชื่อ-สกุล</th>
+                                                        <th className="p-2 border border-gray-300 text-center">ชั้น/ห้อง</th>
+                                                        <th className="p-2 border border-gray-300 text-center">สถานะ</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {unregGroup.sortedKeys.length > 0 ? unregGroup.sortedKeys.map(roomKey => {
+                                                        // คำนวณจำนวนนักเรียนในห้องทั้งหมด และที่ลงทะเบียนแล้ว
+                                                        const allStudentsInRoom = (students || []).filter(s => {
+                                                            let r = s.classLevel && s.room ? `${s.classLevel}/${s.room}` : 'ไม่ระบุ';
+                                                            if (!r.startsWith('ม.') && r !== 'ไม่ระบุ') r = `ม.${r}`;
+                                                            return r === roomKey;
+                                                        });
+                                                        const totalCount = allStudentsInRoom.length;
+                                                        const unregCount = unregGroup.grouped[roomKey].length;
+                                                        const regCount = totalCount - unregCount;
+
+                                                        return (
+                                                            <React.Fragment key={roomKey}>
+                                                                <tr className="bg-red-50">
+                                                                    <td colSpan="5" className="p-2 border font-bold text-red-700">
+                                                                        ชั้น/ห้อง: {roomKey} <span className="text-gray-500 font-normal ml-2">| ครูที่ปรึกษา: {getAdvisorName(roomKey)}</span> 
+                                                                        <span className="text-gray-700 font-normal md:ml-4 block md:inline mt-1 md:mt-0 whitespace-normal">
+                                                                            (นักเรียนทั้งหมด <span className="font-bold text-blue-600">{totalCount}</span> คน | 
+                                                                            ลงทะเบียนแล้ว <span className="font-bold text-green-600">{regCount}</span> คน | 
+                                                                            ยังไม่ลงทะเบียน <span className="font-bold text-red-600">{unregCount}</span> คน)
+                                                                        </span>
+                                                                    </td>
+                                                                </tr>
+                                                                {unregGroup.grouped[roomKey].map((s,i) => (
+                                                                    <tr key={i} className="border-b bg-white hover:bg-red-50">
+                                                                        <td className="p-2 border text-center text-gray-500">{i+1}</td>
+                                                                        <td className="p-2 border text-center">{s.code}</td>
+                                                                        <td className="p-2 border text-left font-medium">{s.name}</td>
+                                                                        <td className="p-2 border text-center">{s.room}</td>
+                                                                        <td className="p-2 border text-center text-red-500 font-bold">ยังไม่ลงทะเบียน</td>
+                                                                    </tr>
+                                                                ))}
+                                                            </React.Fragment>
+                                                        );
+                                                    }) : <tr><td colSpan="5" className="p-4 text-center text-green-600 font-bold"><i className="fa-solid fa-check-circle mr-2"></i>นักเรียนทุกคนลงทะเบียนครบถ้วนแล้ว</td></tr>}
+                                                </tbody>
+                                            </table>
+                                        )}
+                                    </React.Fragment>
+                                )}
+                            </div>
                         )}
 
                         {activeTab === 'eval' && (
@@ -8195,188 +8792,180 @@
                             </div>
                         )}
 
-                        {/* --- 2. แท็บใหม่: รายงานสถิติการขาดเรียนและหนีเรียน --- */}
                         {activeTab === 'absent_stats' && (
                             <div className="overflow-x-auto">
-                                {classFilter && roomFilter ? (
-                                    (()=>{
-                                        const roomStats = {};
-                                        let maxChartVal = 0;
-                                        combinedStatsData.forEach(stu => {
-                                            if (stu.absent > 0 || stu.skip > 0) {
-                                                const rKey = `${stu.classLevel || '?'}/${stu.room || '?'}`;
-                                                if (!roomStats[rKey]) roomStats[rKey] = { room: rKey, absent: 0, skip: 0, stuCount: 0 };
-                                                roomStats[rKey].absent += stu.absent;
-                                                roomStats[rKey].skip += stu.skip;
-                                                roomStats[rKey].stuCount += 1;
-                                            }
-                                        });
-                                        Object.values(roomStats).forEach(stat => {
-                                            const total = stat.absent + stat.skip;
-                                            if (total > maxChartVal) maxChartVal = total;
-                                        });
-                                        // เรียงลำดับตามระดับชั้นและห้องจากน้อยไปมาก
-                                        const roomStatsArray = Object.values(roomStats).sort((a,b) => {
-                                            const matchA = a.room.match(/ม\.(\d+)\/(\d+)/);
-                                            const matchB = b.room.match(/ม\.(\d+)\/(\d+)/);
-                                            if (matchA && matchB) {
-                                                if (matchA[1] !== matchB[1]) return Number(matchA[1]) - Number(matchB[1]);
-                                                return Number(matchA[2]) - Number(matchB[2]);
-                                            }
-                                            return a.room.localeCompare(b.room);
-                                        });
+                                {(()=>{
+                                    const roomStats = {};
+                                    let maxChartVal = 0;
+                                    combinedStatsData.forEach(stu => {
+                                        if (stu.absent > 0 || stu.skip > 0) {
+                                            let rKey = String(stu.fullRoom).trim();
+                                            if (!rKey.startsWith('ม.') && rKey !== 'ไม่ระบุ') rKey = `ม.${rKey}`;
+                                            if (!roomStats[rKey]) roomStats[rKey] = { room: rKey, absent: 0, skip: 0, stuCount: 0 };
+                                            roomStats[rKey].absent += stu.absent;
+                                            roomStats[rKey].skip += stu.skip;
+                                            roomStats[rKey].stuCount += 1;
+                                        }
+                                    });
+                                    Object.values(roomStats).forEach(stat => {
+                                        const total = stat.absent + stat.skip;
+                                        if (total > maxChartVal) maxChartVal = total;
+                                    });
+                                    const roomStatsArray = Object.values(roomStats).sort((a,b) => {
+                                        const matchA = a.room.match(/ม\.(\d+)\/(\d+)/);
+                                        const matchB = b.room.match(/ม\.(\d+)\/(\d+)/);
+                                        if (matchA && matchB) {
+                                            if (matchA[1] !== matchB[1]) return Number(matchA[1]) - Number(matchB[1]);
+                                            return Number(matchA[2]) - Number(matchB[2]);
+                                        }
+                                        return a.room.localeCompare(b.room);
+                                    });
 
-                                        // คำนวณเปอร์เซ็นต์นักเรียนที่มีประวัติ
-                                        const totalStudents = combinedStatsData.length;
-                                        const totalAbsentStudents = combinedStatsData.filter(s => s.absent > 0).length;
-                                        const totalSkipStudents = combinedStatsData.filter(s => s.skip > 0).length;
-                                        const absentPercent = totalStudents > 0 ? ((totalAbsentStudents / totalStudents) * 100).toFixed(2) : 0;
-                                        const skipPercent = totalStudents > 0 ? ((totalSkipStudents / totalStudents) * 100).toFixed(2) : 0;
+                                    const totalStudents = combinedStatsData.length;
+                                    const totalAbsentStudents = combinedStatsData.filter(s => s.absent > 0).length;
+                                    const totalSkipStudents = combinedStatsData.filter(s => s.skip > 0).length;
+                                    const absentPercent = totalStudents > 0 ? ((totalAbsentStudents / totalStudents) * 100).toFixed(2) : 0;
+                                    const skipPercent = totalStudents > 0 ? ((totalSkipStudents / totalStudents) * 100).toFixed(2) : 0;
 
-                                        return (
-                                        <React.Fragment>
-                                            <div className="mb-4 bg-orange-50 border border-orange-200 p-4 rounded-lg print:bg-transparent print:border-none print:p-0 flex justify-between items-center">
-                                                <div>
-                                                    <h3 className="font-bold text-orange-800 text-lg text-left"><i className="fa-solid fa-chart-line mr-2"></i> สรุปสถิติการขาดเรียนและหนีเรียน (แยกตามห้อง)</h3>
-                                                    <p className="text-sm text-orange-700 mt-1 text-left">
-                                                        สรุปยอดรวมจำนวนคาบที่ขาดและหนีเรียนของนักเรียน <strong>{(classFilter && roomFilter) ? `ชั้น ${classFilter}/${roomFilter}` : 'ทุกชั้นเรียน'}</strong>
-                                                    </p>
-                                                </div>
-                                                {(classFilter && roomFilter) && (
-                                                    <div className="text-right text-sm text-gray-600">
-                                                        <strong>ครูที่ปรึกษา:</strong> {getAdvisorName(`${classFilter}/${roomFilter}`)}
-                                                    </div>
-                                                )}
-                                            </div>
-                                            
-                                            <table className="w-full text-sm text-left border-collapse border border-gray-300 mb-8">
-                                                <thead className="bg-gray-100 text-gray-800">
-                                                    <tr>
-                                                        <th className="p-3 border border-gray-300 text-center">ลำดับ</th>
-                                                        <th className="p-3 border border-gray-300 text-center">ระดับชั้น/ห้อง</th>
-                                                        <th className="p-3 border border-gray-300 text-center text-red-600">จำนวนนักเรียนที่มีประวัติ (คน)</th>
-                                                        <th className="p-3 border border-gray-300 text-center text-red-600">รวมขาดเรียน (คาบ)</th>
-                                                        <th className="p-3 border border-gray-300 text-center text-rose-600">รวมหนีเรียน (คาบ)</th>
-                                                        <th className="p-3 border border-gray-300 text-center font-bold text-orange-800">รวมทั้งหมด (คาบ)</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    {isFetchingMsRisk ? (
-                                                        <tr><td colSpan="6" className="p-8 text-center text-gray-500"><i className="fa-solid fa-spinner fa-spin text-3xl mb-2"></i><br/>กำลังประมวลผลสถิติ...</td></tr>
-                                                    ) : roomStatsArray.length > 0 ? (
-                                                        roomStatsArray.map((stat, index) => (
-                                                            <tr key={stat.room} className="hover:bg-orange-50 transition border-b border-gray-200">
-                                                                <td className="p-3 border border-gray-300 text-center text-gray-500">{index + 1}</td>
-                                                                <td className="p-3 border border-gray-300 text-center font-bold text-ns-blue">ชั้น {stat.room}</td>
-                                                                <td className="p-3 border border-gray-300 text-center font-medium">{stat.stuCount}</td>
-                                                                <td className="p-3 border border-gray-300 text-center text-red-600 font-bold">{stat.absent > 0 ? stat.absent : '-'}</td>
-                                                                <td className="p-3 border border-gray-300 text-center text-rose-600 font-bold">{stat.skip > 0 ? stat.skip : '-'}</td>
-                                                                <td className="p-3 border border-gray-300 text-center font-bold text-orange-800 bg-orange-50 print:bg-transparent">{stat.absent + stat.skip}</td>
-                                                            </tr>
-                                                        ))
-                                                    ) : (
-                                                        <tr><td colSpan="6" className="p-10 text-center text-gray-400">ไม่มีสถิติการขาด/หนีเรียนตามเงื่อนไข</td></tr>
-                                                    )}
-                                                </tbody>
-                                            </table>
-
-                                            {roomStatsArray.length > 0 && !isFetchingMsRisk && (
-                                                <div className="mt-6 bg-white border border-gray-200 p-6 rounded-lg shadow-sm">
-                                                    <h4 className="font-bold text-gray-800 mb-4 text-center border-b pb-2"><i className="fa-solid fa-chart-bar text-ns-blue mr-2"></i> กราฟเปรียบเทียบสถิติ ขาด/หนีเรียน (คาบ)</h4>
-                                                    <div className="flex flex-col gap-3 mt-4">
-                                                        {roomStatsArray.map(stat => {
-                                                            const total = stat.absent + stat.skip;
-                                                            const absentWidth = total > 0 ? (stat.absent / maxChartVal) * 100 : 0;
-                                                            const skipWidth = total > 0 ? (stat.skip / maxChartVal) * 100 : 0;
-                                                            return (
-                                                                <div key={stat.room} className="flex items-center gap-4">
-                                                                    <div className="w-20 text-right text-sm font-bold text-gray-700">ชั้น {stat.room}</div>
-                                                                    <div className="flex-1 flex h-6 bg-gray-100 rounded overflow-hidden" style={{ display: 'flex' }}>
-                                                                        {stat.absent > 0 && <div style={{width: `${absentWidth}%`, backgroundColor: '#ef4444', color: 'white'}} className="h-full text-[10px] flex items-center justify-center font-bold" title={`ขาด: ${stat.absent}`}>{stat.absent}</div>}
-                                                                        {stat.skip > 0 && <div style={{width: `${skipWidth}%`, backgroundColor: '#003366', color: 'white'}} className="h-full text-[10px] flex items-center justify-center font-bold" title={`หนี: ${stat.skip}`}>{stat.skip}</div>}
-                                                                    </div>
-                                                                    <div className="w-10 text-xs font-bold text-gray-500 text-center">{total}</div>
-                                                                </div>
-                                                            );
-                                                        })}
-                                                    </div>
-                                                    <div className="flex justify-center gap-6 mt-6 pt-4 border-t text-sm font-bold text-gray-700">
-                                                        <span className="flex items-center"><span className="w-3 h-3 bg-red-500 rounded-full mr-2"></span> ร้อยละนักเรียนที่ขาดเรียน {absentPercent}%</span>
-                                                        <span className="flex items-center"><span className="w-3 h-3 bg-ns-blue rounded-full mr-2"></span> ร้อยละนักเรียนที่หนีเรียน {skipPercent}%</span>
-                                                    </div>
-                                                </div>
-                                            )}
-                                        </React.Fragment>
-                                        );
-                                    })()
-                                ) : (
-                                    <div className="text-center p-10 bg-gray-50 rounded-xl border border-gray-200">
-                                        <i className="fa-solid fa-chart-column text-5xl text-gray-300 mb-3"></i>
-                                        <p className="text-gray-500">กรุณาเลือก <strong>ชั้นเรียน</strong> และ <strong>ห้อง</strong> และกดปุ่ม <span className="font-bold text-red-600">ดึงข้อมูล</span> เพื่อดูรายงาน</p>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-
-                        {/* --- 3. แท็บใหม่: รายงานการจัดอันดับนักเรียน --- */}
-                        {activeTab === 'ranking' && (
-                            <div className="overflow-x-auto">
-                                {classFilter && roomFilter ? (
+                                    return (
                                     <React.Fragment>
-                                        <div className="mb-4 bg-purple-50 border border-purple-200 p-4 rounded-lg print:bg-transparent print:border-none print:p-0 flex justify-between items-center">
+                                        <div className="mb-4 bg-orange-50 border border-orange-200 p-4 rounded-lg print:bg-transparent print:border-none print:p-0 flex justify-between items-center">
                                             <div>
-                                                <h3 className="font-bold text-purple-800 text-lg"><i className="fa-solid fa-ranking-star mr-2"></i> จัดอันดับสถิตินักเรียน</h3>
-                                                <p className="text-sm text-purple-700 mt-1">
-                                                    สรุปยอดและจัดอันดับพฤติกรรมของนักเรียน <strong>ชั้น {classFilter}/{roomFilter}</strong>
+                                                <h3 className="font-bold text-orange-800 text-lg text-left"><i className="fa-solid fa-chart-line mr-2"></i> สรุปสถิติการขาดเรียนและหนีเรียน (แยกตามห้อง)</h3>
+                                                <p className="text-sm text-orange-700 mt-1 text-left">
+                                                    สรุปยอดรวมจำนวนคาบที่ขาดและหนีเรียนของนักเรียน <strong>{(classFilter && roomFilter) ? `ชั้น ${classFilter}/${roomFilter}` : 'ทุกชั้นเรียน'}</strong>
                                                 </p>
                                             </div>
-                                            <div className="text-right text-sm text-gray-600">
-                                                <strong>ครูที่ปรึกษา:</strong> {getAdvisorName(`${classFilter}/${roomFilter}`)}
-                                            </div>
+                                            {(classFilter && roomFilter) && (
+                                                <div className="text-right text-sm text-gray-600">
+                                                    <strong>ครูที่ปรึกษา:</strong> {getAdvisorName(`${classFilter}/${roomFilter}`)}
+                                                </div>
+                                            )}
                                         </div>
-                                        <table className="w-full text-sm text-left border-collapse border border-gray-300">
+                                        
+                                        <table className="w-full text-sm text-left border-collapse border border-gray-300 mb-8">
                                             <thead className="bg-gray-100 text-gray-800">
                                                 <tr>
-                                                    <th className="p-3 border border-gray-300 text-center w-16">อันดับ</th>
-                                                    <th className="p-3 border border-gray-300 text-center w-28">เลขประจำตัว</th>
-                                                    <th className="p-3 border border-gray-300">ชื่อ-สกุล</th>
-                                                    <th className="p-3 border border-gray-300 text-center w-24 text-red-600">ขาด (คาบ)</th>
-                                                    <th className="p-3 border border-gray-300 text-center w-24 text-rose-600">หนี (คาบ)</th>
-                                                    <th className="p-3 border border-gray-300 text-center w-24 text-orange-600">หัก (คะแนน)</th>
-                                                    <th className="p-3 border border-gray-300 text-center w-24 text-green-600">เพิ่ม (คะแนน)</th>
+                                                    <th className="p-3 border border-gray-300 text-center">ลำดับ</th>
+                                                    <th className="p-3 border border-gray-300 text-center">ระดับชั้น/ห้อง</th>
+                                                    <th className="p-3 border border-gray-300 text-center text-red-600">จำนวนนักเรียนที่มีประวัติ (คน)</th>
+                                                    <th className="p-3 border border-gray-300 text-center text-red-600">รวมขาดเรียน (คาบ)</th>
+                                                    <th className="p-3 border border-gray-300 text-center text-rose-600">รวมหนีเรียน (คาบ)</th>
+                                                    <th className="p-3 border border-gray-300 text-center font-bold text-orange-800">รวมทั้งหมด (คาบ)</th>
                                                 </tr>
                                             </thead>
                                             <tbody>
                                                 {isFetchingMsRisk ? (
-                                                    <tr><td colSpan="7" className="p-8 text-center text-gray-500"><i className="fa-solid fa-spinner fa-spin text-3xl mb-2"></i><br/>กำลังประมวลผลสถิติ...</td></tr>
-                                                ) : sortedRankingStats.length > 0 ? (
-                                                    sortedRankingStats.map((stu, index) => (
-                                                        <tr key={stu.code} className="hover:bg-purple-50 transition border-b border-gray-200">
-                                                            <td className="p-3 border border-gray-300 text-center font-bold text-purple-700">
-                                                                {index < 3 ? <i className={`fa-solid fa-medal ${index===0?'text-yellow-500':index===1?'text-gray-400':'text-orange-400'}`}></i> : index + 1}
-                                                            </td>
-                                                            <td className="p-3 border border-gray-300 text-center font-mono">{stu.code}</td>
-                                                            <td className="p-3 border border-gray-300 font-medium">{stu.name}</td>
-                                                            <td className={`p-3 border border-gray-300 text-center font-bold ${rankingSortBy === 'absent_desc' ? 'bg-purple-100 text-purple-800' : 'text-red-600'}`}>{stu.absent > 0 ? stu.absent : '-'}</td>
-                                                            <td className={`p-3 border border-gray-300 text-center font-bold ${rankingSortBy === 'skip_desc' ? 'bg-purple-100 text-purple-800' : 'text-rose-600'}`}>{stu.skip > 0 ? stu.skip : '-'}</td>
-                                                            <td className={`p-3 border border-gray-300 text-center font-bold ${rankingSortBy === 'neg_desc' ? 'bg-purple-100 text-purple-800' : 'text-orange-600'}`}>{stu.neg > 0 ? `-${stu.neg}` : '-'}</td>
-                                                            <td className={`p-3 border border-gray-300 text-center font-bold ${rankingSortBy === 'pos_desc' ? 'bg-purple-100 text-purple-800' : 'text-green-600'}`}>{stu.pos > 0 ? `+${stu.pos}` : '-'}</td>
+                                                    <tr><td colSpan="6" className="p-8 text-center text-gray-500"><i className="fa-solid fa-spinner fa-spin text-3xl mb-2"></i><br/>กำลังประมวลผลสถิติ...</td></tr>
+                                                ) : roomStatsArray.length > 0 ? (
+                                                    roomStatsArray.map((stat, index) => (
+                                                        <tr key={stat.room} className="hover:bg-orange-50 transition border-b border-gray-200">
+                                                            <td className="p-3 border border-gray-300 text-center text-gray-500">{index + 1}</td>
+                                                            <td className="p-3 border border-gray-300 text-center font-bold text-ns-blue">ชั้น {stat.room}</td>
+                                                            <td className="p-3 border border-gray-300 text-center font-medium">{stat.stuCount}</td>
+                                                            <td className="p-3 border border-gray-300 text-center text-red-600 font-bold">{stat.absent > 0 ? stat.absent : '-'}</td>
+                                                            <td className="p-3 border border-gray-300 text-center text-rose-600 font-bold">{stat.skip > 0 ? stat.skip : '-'}</td>
+                                                            <td className="p-3 border border-gray-300 text-center font-bold text-orange-800 bg-orange-50 print:bg-transparent">{stat.absent + stat.skip}</td>
                                                         </tr>
                                                     ))
                                                 ) : (
-                                                    <tr><td colSpan="7" className="p-10 text-center text-gray-400">ไม่มีข้อมูลนักเรียนในห้องนี้</td></tr>
+                                                    <tr><td colSpan="6" className="p-10 text-center text-gray-400">ไม่มีสถิติการขาด/หนีเรียนตามเงื่อนไข</td></tr>
                                                 )}
                                             </tbody>
                                         </table>
+
+                                        {roomStatsArray.length > 0 && !isFetchingMsRisk && (
+                                            <div className="mt-6 bg-white border border-gray-200 p-6 rounded-lg shadow-sm">
+                                                <h4 className="font-bold text-gray-800 mb-4 text-center border-b pb-2"><i className="fa-solid fa-chart-bar text-ns-blue mr-2"></i> กราฟเปรียบเทียบสถิติ ขาด/หนีเรียน (คาบ)</h4>
+                                                <div className="flex flex-col gap-3 mt-4">
+                                                    {roomStatsArray.map(stat => {
+                                                        const total = stat.absent + stat.skip;
+                                                        const absentWidth = total > 0 ? (stat.absent / maxChartVal) * 100 : 0;
+                                                        const skipWidth = total > 0 ? (stat.skip / maxChartVal) * 100 : 0;
+                                                        return (
+                                                            <div key={stat.room} className="flex items-center gap-4">
+                                                                <div className="w-20 text-right text-sm font-bold text-gray-700">ชั้น {stat.room}</div>
+                                                                <div className="flex-1 flex h-6 bg-gray-100 rounded overflow-hidden" style={{ display: 'flex' }}>
+                                                                    {stat.absent > 0 && <div style={{width: `${absentWidth}%`, backgroundColor: '#ef4444', color: 'white'}} className="h-full text-[10px] flex items-center justify-center font-bold" title={`ขาด: ${stat.absent}`}>{stat.absent}</div>}
+                                                                    {stat.skip > 0 && <div style={{width: `${skipWidth}%`, backgroundColor: '#003366', color: 'white'}} className="h-full text-[10px] flex items-center justify-center font-bold" title={`หนี: ${stat.skip}`}>{stat.skip}</div>}
+                                                                </div>
+                                                                <div className="w-10 text-xs font-bold text-gray-500 text-center">{total}</div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                                <div className="flex justify-center gap-6 mt-6 pt-4 border-t text-sm font-bold text-gray-700">
+                                                    <span className="flex items-center">
+                                                        <span className="w-3 h-3 rounded-full mr-2 print:border print:border-red-500" style={{backgroundColor: '#ef4444', WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact'}}></span> 
+                                                        ร้อยละนักเรียนที่ขาดเรียน {absentPercent}%
+                                                    </span>
+                                                    <span className="flex items-center">
+                                                        <span className="w-3 h-3 rounded-full mr-2 print:border print:border-blue-900" style={{backgroundColor: '#003366', WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact'}}></span> 
+                                                        ร้อยละนักเรียนที่หนีเรียน {skipPercent}%
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        )}
                                     </React.Fragment>
-                                ) : (
-                                    <div className="text-center p-10 bg-gray-50 rounded-xl border border-gray-200">
-                                        <i className="fa-solid fa-trophy text-5xl text-gray-300 mb-3"></i>
-                                        <p className="text-gray-500">กรุณาเลือก <strong>ชั้นเรียน</strong> และ <strong>ห้อง</strong> และกดปุ่ม <span className="font-bold text-red-600">ดึงข้อมูล</span> เพื่อดูรายงาน</p>
-                                    </div>
-                                )}
+                                    );
+                                })()}
                             </div>
                         )}
+
+                        {activeTab === 'ranking' && (
+                            <div className="overflow-x-auto">
+                                <React.Fragment>
+                                    <div className="mb-4 bg-purple-50 border border-purple-200 p-4 rounded-lg print:bg-transparent print:border-none print:p-0 flex justify-between items-center">
+                                        <div>
+                                            <h3 className="font-bold text-purple-800 text-lg"><i className="fa-solid fa-ranking-star mr-2"></i> จัดอันดับสถิตินักเรียน</h3>
+                                            <p className="text-sm text-purple-700 mt-1">
+                                                สรุปยอดและจัดอันดับพฤติกรรมของนักเรียน <strong>{(classFilter && roomFilter) ? `ชั้น ${classFilter}/${roomFilter}` : 'ทุกชั้นเรียน'}</strong>
+                                            </p>
+                                        </div>
+                                        {(classFilter && roomFilter) && (
+                                            <div className="text-right text-sm text-gray-600">
+                                                <strong>ครูที่ปรึกษา:</strong> {getAdvisorName(`${classFilter}/${roomFilter}`)}
+                                            </div>
+                                        )}
+                                    </div>
+                                    <table className="w-full text-sm text-left border-collapse border border-gray-300">
+                                        <thead className="bg-gray-100 text-gray-800">
+                                            <tr>
+                                                <th className="p-3 border border-gray-300 text-center w-16">อันดับ</th>
+                                                <th className="p-3 border border-gray-300 text-center w-28">เลขประจำตัว</th>
+                                                <th className="p-3 border border-gray-300">ชื่อ-สกุล</th>
+                                                <th className="p-3 border border-gray-300 text-center w-24 text-red-600">ขาด (คาบ)</th>
+                                                <th className="p-3 border border-gray-300 text-center w-24 text-rose-600">หนี (คาบ)</th>
+                                                <th className="p-3 border border-gray-300 text-center w-24 text-orange-600">หัก (คะแนน)</th>
+                                                <th className="p-3 border border-gray-300 text-center w-24 text-green-600">เพิ่ม (คะแนน)</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {isFetchingMsRisk ? (
+                                                <tr><td colSpan="7" className="p-8 text-center text-gray-500"><i className="fa-solid fa-spinner fa-spin text-3xl mb-2"></i><br/>กำลังประมวลผลสถิติ...</td></tr>
+                                            ) : sortedRankingStats.length > 0 ? (
+                                                sortedRankingStats.map((stu, index) => (
+                                                    <tr key={stu.code} className="hover:bg-purple-50 transition border-b border-gray-200">
+                                                        <td className="p-3 border border-gray-300 text-center font-bold text-purple-700">
+                                                            {index < 3 ? <i className={`fa-solid fa-medal ${index===0?'text-yellow-500':index===1?'text-gray-400':'text-orange-400'}`}></i> : index + 1}
+                                                        </td>
+                                                        <td className="p-3 border border-gray-300 text-center font-mono">{stu.code}</td>
+                                                        <td className="p-3 border border-gray-300 font-medium">{stu.name}</td>
+                                                        <td className={`p-3 border border-gray-300 text-center font-bold ${rankingSortBy === 'absent_desc' ? 'bg-purple-100 text-purple-800' : 'text-red-600'}`}>{stu.absent > 0 ? stu.absent : '-'}</td>
+                                                        <td className={`p-3 border border-gray-300 text-center font-bold ${rankingSortBy === 'skip_desc' ? 'bg-purple-100 text-purple-800' : 'text-rose-600'}`}>{stu.skip > 0 ? stu.skip : '-'}</td>
+                                                        <td className={`p-3 border border-gray-300 text-center font-bold ${rankingSortBy === 'neg_desc' ? 'bg-purple-100 text-purple-800' : 'text-orange-600'}`}>{stu.neg > 0 ? `-${stu.neg}` : '-'}</td>
+                                                        <td className={`p-3 border border-gray-300 text-center font-bold ${rankingSortBy === 'pos_desc' ? 'bg-purple-100 text-purple-800' : 'text-green-600'}`}>{stu.pos > 0 ? `+${stu.pos}` : '-'}</td>
+                                                    </tr>
+                                                ))
+                                            ) : (
+                                                <tr><td colSpan="7" className="p-10 text-center text-gray-400">ไม่มีข้อมูลนักเรียนตามเงื่อนไข</td></tr>
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </React.Fragment>
+                            </div>
+                        )}
+
                     </div>
                 </div>
             );
