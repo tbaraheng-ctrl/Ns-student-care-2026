@@ -8807,7 +8807,7 @@
             );
         };
 
-// // 11. หน้ารายงานผล (ReportsView) - ชุดใหม่ครบทุกฟังก์ชัน + ระบบกิจกรรมชุมนุม และ Excel Export
+// // // // 11. หน้ารายงานผล (ReportsView) - ชุดใหม่ครบทุกฟังก์ชัน + ระบบกิจกรรมชุมนุม และ Excel Export
         const ReportsView = (props) => {
         const { students, timeRecords, behaviorRecords, activityRecords, activitiesSetting, schoolConfig, teachers, leaveRecords, user, registrations, allSchedules, msMakeupRecords } = props;
             const [activeTab, setActiveTab] = useState('stats');
@@ -8824,6 +8824,7 @@
 
             const [msRiskData, setMsRiskData] = useState([]);
             const [rawRiskRecords, setRawRiskRecords] = useState([]); 
+            const [classAttRecords, setClassAttRecords] = useState([]); // เพิ่ม State เก็บข้อมูลเช็คชื่อรายวิชา
             const [isFetchingMsRisk, setIsFetchingMsRisk] = useState(false);
             const [rankingSortBy, setRankingSortBy] = useState('followup_absent'); 
 
@@ -8838,6 +8839,10 @@
             const [isFetchingParent, setIsFetchingParent] = useState(false);
             const [parentStatusFilter, setParentStatusFilter] = useState('all');
             const [hasFetchedParent, setHasFetchedParent] = useState(false); // เพิ่มบรรทัดนี้เข้ามาเพื่อแก้ Error
+
+            // --- State สำหรับกราฟสถิติเข้าออก ---
+            const [chartRange, setChartRange] = useState('1week');
+            const [chartRangeAbs, setChartRangeAbs] = useState('1week'); // เพิ่ม State สำหรับกราฟหน้าสถิติขาด/หนีเรียน
 
             // --- ฟังก์ชันสร้างหน้าต่าง Print Preview (มาตรฐานงานสารบรรณ) ---
             const handlePrintReport = () => {
@@ -8902,8 +8907,8 @@
                                 .a4-container { margin: 0; padding: 0; box-shadow: none; width: 100%; max-width: 100%; min-height: auto; overflow: visible; }
                             }
                         </style>
-                        <script src="https://cdn.tailwindcss.com"><\/script>
-                        <script>
+                        \x3Cscript src="https://cdn.tailwindcss.com">\x3C/script>
+                        \x3Cscript>
                             function updatePrintStyles() {
                                 const size = document.getElementById('paperSize').value;
                                 const orientation = document.getElementById('orientation').value;
@@ -8945,7 +8950,7 @@
                                 document.getElementById('orientation').value = '${defaultPageLayout}';
                                 updatePrintStyles();
                             };
-                        <\/script>
+                        \x3C/script>
                     </head>
                     <body>
                         <div class="preview-toolbar">
@@ -9523,16 +9528,57 @@
                 setIsFetchingMsRisk(true);
                 setMsRiskData([]);
                 setRawRiskRecords([]);
+                setClassAttRecords([]);
 
                 try {
-                    // เปลี่ยนมารับยอดสรุป (Summary) โดยตรงจากชีท สรุปสถิติรายวิชา เพื่อความเร็ว
-                    const res = await callGAS('getMsRiskData', {
-                        targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48',
-                        room: 'ALL'
-                    });
+                    const roomParam = (classFilter && roomFilter) ? `${classFilter}/${roomFilter}` : 'ALL';
+                    
+                    // เรียกข้อมูล 2 ส่วนพร้อมกัน: สรุป ม.ส. และ บันทึกการเช็คชื่อรายวิชา (สำหรับกราฟ)
+                    const [resMs, resAtt] = await Promise.all([
+                        callGAS('getMsRiskData', {
+                            targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48',
+                            room: roomParam
+                        }),
+                        callGAS('getAttendanceRecord', {
+                            targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48',
+                            date: 'ALL',
+                            room: roomParam,
+                            subjectCode: 'ALL'
+                        })
+                    ]);
 
-                    if (res.status === 'success') {
-                        const summaryRecords = res.data || [];
+                    if (resAtt.status === 'success') {
+                        let parsedRecords = [];
+                        (resAtt.data || []).forEach(r => {
+                            let isJsonStr = false;
+                            if (r.status && typeof r.status === 'string' && r.status.includes('{')) {
+                                try {
+                                    const dailyObj = JSON.parse(r.status);
+                                    if (typeof dailyObj === 'object' && dailyObj !== null) {
+                                        isJsonStr = true;
+                                        for (const k in dailyObj) {
+                                            const match = k.match(/^(.*?) \(คาบ (.*)\)$/);
+                                            if (match) {
+                                                parsedRecords.push({
+                                                    ...r,
+                                                    date: match[1],
+                                                    period: match[2],
+                                                    status: dailyObj[k]
+                                                });
+                                            }
+                                        }
+                                    }
+                                } catch(e) {}
+                            }
+                            if (!isJsonStr && r.date) {
+                                parsedRecords.push(r);
+                            }
+                        });
+                        setClassAttRecords(parsedRecords);
+                    }
+
+                    if (resMs.status === 'success') {
+                        const summaryRecords = resMs.data || [];
                         setRawRiskRecords(summaryRecords); // เก็บยอดสรุปไว้ให้กราฟและ Ranking ใช้งานต่อ
 
                         const processedData = [];
@@ -10629,16 +10675,227 @@
                         </div>
 
                         {activeTab === 'stats' && (
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                                <div className="bg-emerald-50 border-l-4 border-emerald-500 p-4 rounded-lg text-center shadow-sm md:col-span-4"><p className="text-sm font-bold text-emerald-700">จำนวนนักเรียนทั้งสิ้น</p><h4 className="text-3xl font-extrabold text-emerald-800">{(students || []).length}<span className="text-lg font-normal ml-1">คน</span></h4></div>
-                                <div className="bg-blue-50 border-l-4 border-blue-500 p-4 rounded-lg text-center shadow-sm"><p className="text-sm font-bold text-blue-700">จำนวนบันทึกเข้า</p><h4 className="text-3xl font-extrabold text-blue-800">{inScans}<span className="text-lg font-normal ml-1">คน</span></h4><p className="text-xs text-gray-500">ร้อยละ {((inScans/expectedScans)*100||0).toFixed(1)}%</p></div>
-                                <div className="bg-indigo-50 border-l-4 border-indigo-500 p-4 rounded-lg text-center shadow-sm"><p className="text-sm font-bold text-indigo-700">จำนวนบันทึกออก</p><h4 className="text-3xl font-extrabold text-indigo-800">{outScans}<span className="text-lg font-normal ml-1">คน</span></h4><p className="text-xs text-gray-500">ร้อยละ {((outScans/expectedScans)*100||0).toFixed(1)}%</p></div>
-                                <div className="bg-gray-100 border-l-4 border-gray-500 p-4 rounded-lg text-center shadow-sm"><p className="text-sm font-bold text-gray-700">นักเรียนที่ไม่บันทึกเข้า</p><h4 className="text-3xl font-extrabold text-gray-800">{notInScans}<span className="text-lg font-normal ml-1">คน</span></h4><p className="text-xs text-gray-500">ร้อยละ {((notInScans/expectedScans)*100||0).toFixed(1)}%</p></div>
-                                <div className="bg-gray-100 border-l-4 border-gray-500 p-4 rounded-lg text-center shadow-sm"><p className="text-sm font-bold text-gray-700">นักเรียนที่ไม่บันทึกออก</p><h4 className="text-3xl font-extrabold text-gray-800">{notOutScans}<span className="text-lg font-normal ml-1">คน</span></h4><p className="text-xs text-gray-500">ร้อยละ {((notOutScans/expectedScans)*100||0).toFixed(1)}%</p></div>
-                                <div className="bg-orange-50 border-l-4 border-orange-500 p-4 rounded-lg text-center shadow-sm"><p className="text-sm font-bold text-orange-700">ลาป่วย</p><h4 className="text-3xl font-extrabold text-orange-800">{sickLeaveCount}<span className="text-lg font-normal ml-1">คน</span></h4><p className="text-xs text-gray-500">ร้อยละ {((sickLeaveCount/expectedScans)*100||0).toFixed(1)}%</p></div>
-                                <div className="bg-purple-50 border-l-4 border-purple-500 p-4 rounded-lg text-center shadow-sm"><p className="text-sm font-bold text-purple-700">ลากิจ</p><h4 className="text-3xl font-extrabold text-purple-800">{personalLeaveCount}<span className="text-lg font-normal ml-1">คน</span></h4><p className="text-xs text-gray-500">ร้อยละ {((personalLeaveCount/expectedScans)*100||0).toFixed(1)}%</p></div>
-                                <div className="bg-teal-50 border-l-4 border-teal-500 p-4 rounded-lg text-center shadow-sm"><p className="text-sm font-bold text-teal-700">ไปกิจกรรม</p><h4 className="text-3xl font-extrabold text-teal-800">{activityLeaveCount}<span className="text-lg font-normal ml-1">คน</span></h4><p className="text-xs text-gray-500">ร้อยละ {((activityLeaveCount/expectedScans)*100||0).toFixed(1)}%</p></div>
-                                <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-lg text-center shadow-sm md:col-span-4"><p className="text-sm font-bold text-red-700">จำนวนนักเรียนมาสาย</p><h4 className="text-3xl font-extrabold text-red-800">{lateScans}<span className="text-lg font-normal ml-1">คน</span></h4><p className="text-xs text-gray-500">คิดเป็นร้อยละ {((lateScans/expectedScans)*100||0).toFixed(1)}% ของนักเรียนทั้งหมด</p></div>
+                            <div className="space-y-6">
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                    <div className="bg-emerald-50 border-l-4 border-emerald-500 p-4 rounded-lg text-center shadow-sm md:col-span-4"><p className="text-sm font-bold text-emerald-700">จำนวนนักเรียนทั้งสิ้น</p><h4 className="text-3xl font-extrabold text-emerald-800">{(students || []).length}<span className="text-lg font-normal ml-1">คน</span></h4></div>
+                                    <div className="bg-blue-50 border-l-4 border-blue-500 p-4 rounded-lg text-center shadow-sm"><p className="text-sm font-bold text-blue-700">จำนวนบันทึกเข้า</p><h4 className="text-3xl font-extrabold text-blue-800">{inScans}<span className="text-lg font-normal ml-1">คน</span></h4><p className="text-xs text-gray-500">ร้อยละ {((inScans/expectedScans)*100||0).toFixed(1)}%</p></div>
+                                    <div className="bg-indigo-50 border-l-4 border-indigo-500 p-4 rounded-lg text-center shadow-sm"><p className="text-sm font-bold text-indigo-700">จำนวนบันทึกออก</p><h4 className="text-3xl font-extrabold text-indigo-800">{outScans}<span className="text-lg font-normal ml-1">คน</span></h4><p className="text-xs text-gray-500">ร้อยละ {((outScans/expectedScans)*100||0).toFixed(1)}%</p></div>
+                                    <div className="bg-gray-100 border-l-4 border-gray-500 p-4 rounded-lg text-center shadow-sm"><p className="text-sm font-bold text-gray-700">นักเรียนที่ไม่บันทึกเข้า</p><h4 className="text-3xl font-extrabold text-gray-800">{notInScans}<span className="text-lg font-normal ml-1">คน</span></h4><p className="text-xs text-gray-500">ร้อยละ {((notInScans/expectedScans)*100||0).toFixed(1)}%</p></div>
+                                    <div className="bg-gray-100 border-l-4 border-gray-500 p-4 rounded-lg text-center shadow-sm"><p className="text-sm font-bold text-gray-700">นักเรียนที่ไม่บันทึกออก</p><h4 className="text-3xl font-extrabold text-gray-800">{notOutScans}<span className="text-lg font-normal ml-1">คน</span></h4><p className="text-xs text-gray-500">ร้อยละ {((notOutScans/expectedScans)*100||0).toFixed(1)}%</p></div>
+                                    <div className="bg-orange-50 border-l-4 border-orange-500 p-4 rounded-lg text-center shadow-sm"><p className="text-sm font-bold text-orange-700">ลาป่วย</p><h4 className="text-3xl font-extrabold text-orange-800">{sickLeaveCount}<span className="text-lg font-normal ml-1">คน</span></h4><p className="text-xs text-gray-500">ร้อยละ {((sickLeaveCount/expectedScans)*100||0).toFixed(1)}%</p></div>
+                                    <div className="bg-purple-50 border-l-4 border-purple-500 p-4 rounded-lg text-center shadow-sm"><p className="text-sm font-bold text-purple-700">ลากิจ</p><h4 className="text-3xl font-extrabold text-purple-800">{personalLeaveCount}<span className="text-lg font-normal ml-1">คน</span></h4><p className="text-xs text-gray-500">ร้อยละ {((personalLeaveCount/expectedScans)*100||0).toFixed(1)}%</p></div>
+                                    <div className="bg-teal-50 border-l-4 border-teal-500 p-4 rounded-lg text-center shadow-sm"><p className="text-sm font-bold text-teal-700">ไปกิจกรรม</p><h4 className="text-3xl font-extrabold text-teal-800">{activityLeaveCount}<span className="text-lg font-normal ml-1">คน</span></h4><p className="text-xs text-gray-500">ร้อยละ {((activityLeaveCount/expectedScans)*100||0).toFixed(1)}%</p></div>
+                                    <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-lg text-center shadow-sm md:col-span-4"><p className="text-sm font-bold text-red-700">จำนวนนักเรียนมาสาย</p><h4 className="text-3xl font-extrabold text-red-800">{lateScans}<span className="text-lg font-normal ml-1">คน</span></h4><p className="text-xs text-gray-500">คิดเป็นร้อยละ {((lateScans/expectedScans)*100||0).toFixed(1)}% ของนักเรียนทั้งหมด</p></div>
+                                </div>
+
+                                {/* แดชบอร์ดกราฟเปรียบเทียบ */}
+                                <div className="bg-white border border-gray-200 p-4 md:p-6 rounded-xl shadow-sm mt-6">
+                                    <div className="flex flex-col md:flex-row justify-between items-center mb-6 border-b pb-4 gap-4">
+                                        <h3 className="font-bold text-gray-800 text-lg w-full md:w-auto">
+                                            <i className="fa-solid fa-chart-pie text-ns-blue mr-2"></i> แดชบอร์ดกราฟสถิติเปรียบเทียบ
+                                        </h3>
+                                        <div className="flex bg-gray-100 p-1 rounded-lg w-full md:w-auto overflow-x-auto no-print">
+                                            <button onClick={() => setChartRange('1week')} className={`flex-1 md:flex-none px-4 py-1.5 text-sm font-bold rounded-md transition whitespace-nowrap ${chartRange === '1week' ? 'bg-white shadow text-ns-blue' : 'text-gray-500 hover:text-gray-700'}`}>1 สัปดาห์</button>
+                                            <button onClick={() => setChartRange('1month')} className={`flex-1 md:flex-none px-4 py-1.5 text-sm font-bold rounded-md transition whitespace-nowrap ${chartRange === '1month' ? 'bg-white shadow text-ns-blue' : 'text-gray-500 hover:text-gray-700'}`}>1 เดือน</button>
+                                            <button onClick={() => setChartRange('1year')} className={`flex-1 md:flex-none px-4 py-1.5 text-sm font-bold rounded-md transition whitespace-nowrap ${chartRange === '1year' ? 'bg-white shadow text-ns-blue' : 'text-gray-500 hover:text-gray-700'}`}>1 ปี</button>
+                                        </div>
+                                    </div>
+
+                                    {(() => {
+                                        const totalSt = (students || []).length || 1;
+                                        const todayDt = new Date();
+                                        const cData = [];
+                                        
+                                        const allT = (timeRecords || []).map(r => ({...r, displayDate: formatDisplayDate(r.date)}));
+                                        const allL = (leaveRecords || []).map(r => ({...r, displayDate: formatDisplayDate(r.date)}));
+
+                                        const getThaiShortMonth = (m) => ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'][m];
+
+                                        if (chartRange === '1week') {
+                                            for (let i = 6; i >= 0; i--) {
+                                                const d = new Date(todayDt.getTime() - i * 86400000);
+                                                const dateStr = getBEStrSafe(d);
+                                                const dayLabel = `${d.getDate()} ${getThaiShortMonth(d.getMonth())}`;
+                                                
+                                                const tRecs = allT.filter(r => r.displayDate === dateStr);
+                                                const lRecs = allL.filter(r => r.displayDate === dateStr);
+                                                
+                                                const inCount = tRecs.filter(r => r.type === 'เข้า').length;
+                                                const outCount = tRecs.filter(r => r.type === 'ออก').length;
+                                                const sickCount = lRecs.filter(r => r.leaveType === 'ลาป่วย').length;
+                                                const personalCount = lRecs.filter(r => r.leaveType === 'ลากิจ').length;
+                                                const activityCount = lRecs.filter(r => r.leaveType === 'ไปกิจกรรม').length;
+                                                const lateCount = tRecs.filter(r => r.type === 'เข้า' && r.statusStr === 'สาย').length;
+                                                
+                                                const noInCount = Math.max(0, totalSt - inCount - lRecs.length);
+                                                const noOutCount = Math.max(0, totalSt - outCount - lRecs.length);
+                                                
+                                                cData.push({ label: dayLabel, inCount, outCount, noInCount, noOutCount, sickCount, personalCount, activityCount, lateCount });
+                                            }
+                                        } else if (chartRange === '1month') {
+                                            // แบ่งกลุ่มข้อมูลทีละ 7 วัน ย้อนหลังรวม 28 วัน (4 สัปดาห์)
+                                            let daysArr = [];
+                                            for (let i = 27; i >= 0; i--) {
+                                                daysArr.push(new Date(todayDt.getTime() - i * 86400000));
+                                            }
+                                            for (let i = 0; i < daysArr.length; i += 7) {
+                                                const chunk = daysArr.slice(i, i + 7);
+                                                const startD = chunk[0];
+                                                const endD = chunk[chunk.length - 1];
+                                                const label = `${startD.getDate()} ${getThaiShortMonth(startD.getMonth())} - ${endD.getDate()} ${getThaiShortMonth(endD.getMonth())}`;
+                                                
+                                                let tRecs = [];
+                                                let lRecs = [];
+                                                let activeDaysCount = 0;
+
+                                                chunk.forEach(d => {
+                                                    const dateStr = getBEStrSafe(d);
+                                                    const dayT = allT.filter(r => r.displayDate === dateStr);
+                                                    const dayL = allL.filter(r => r.displayDate === dateStr);
+                                                    tRecs = tRecs.concat(dayT);
+                                                    lRecs = lRecs.concat(dayL);
+                                                    if (dayT.length > 0 || dayL.length > 0) activeDaysCount++;
+                                                });
+
+                                                if(activeDaysCount === 0) activeDaysCount = 1;
+
+                                                const inCount = tRecs.filter(r => r.type === 'เข้า').length;
+                                                const outCount = tRecs.filter(r => r.type === 'ออก').length;
+                                                const sickCount = lRecs.filter(r => r.leaveType === 'ลาป่วย').length;
+                                                const personalCount = lRecs.filter(r => r.leaveType === 'ลากิจ').length;
+                                                const activityCount = lRecs.filter(r => r.leaveType === 'ไปกิจกรรม').length;
+                                                const lateCount = tRecs.filter(r => r.type === 'เข้า' && r.statusStr === 'สาย').length;
+                                                
+                                                const theoreticalTotal = totalSt * activeDaysCount;
+                                                const noInCount = Math.max(0, theoreticalTotal - inCount - lRecs.length);
+                                                const noOutCount = Math.max(0, theoreticalTotal - outCount - lRecs.length);
+                                                
+                                                cData.push({ label: label, inCount, outCount, noInCount, noOutCount, sickCount, personalCount, activityCount, lateCount });
+                                            }
+                                        } else {
+                                            for (let i = 11; i >= 0; i--) {
+                                                const d = new Date(todayDt.getFullYear(), todayDt.getMonth() - i, 1);
+                                                const m = d.getMonth() + 1;
+                                                const y = d.getFullYear() + 543;
+                                                const monthLabel = `${getThaiShortMonth(d.getMonth())} ${y.toString().slice(-2)}`;
+                                                const monthSuffix = `/${String(m).padStart(2,'0')}/${y}`;
+                                                
+                                                const tRecs = allT.filter(r => r.displayDate && r.displayDate.endsWith(monthSuffix));
+                                                const lRecs = allL.filter(r => r.displayDate && r.displayDate.endsWith(monthSuffix));
+                                                
+                                                const inCount = tRecs.filter(r => r.type === 'เข้า').length;
+                                                const outCount = tRecs.filter(r => r.type === 'ออก').length;
+                                                const sickCount = lRecs.filter(r => r.leaveType === 'ลาป่วย').length;
+                                                const personalCount = lRecs.filter(r => r.leaveType === 'ลากิจ').length;
+                                                const activityCount = lRecs.filter(r => r.leaveType === 'ไปกิจกรรม').length;
+                                                const lateCount = tRecs.filter(r => r.type === 'เข้า' && r.statusStr === 'สาย').length;
+                                                
+                                                const uniqueDays = [...new Set(tRecs.map(r => r.displayDate))];
+                                                const activeDays = uniqueDays.length > 0 ? uniqueDays.length : 1;
+                                                const theoreticalTotal = totalSt * activeDays;
+                                                
+                                                const noInCount = Math.max(0, theoreticalTotal - inCount - lRecs.length);
+                                                const noOutCount = Math.max(0, theoreticalTotal - outCount - lRecs.length);
+                                                
+                                                cData.push({ label: monthLabel, inCount, outCount, noInCount, noOutCount, sickCount, personalCount, activityCount, lateCount });
+                                            }
+                                        }
+
+                                        const renderMiniChart = (title, icon, titleColor, dataKeys, colors, labels) => {
+                                            // ปรับเพดานกราฟให้สูงขึ้น 25% เพื่อเผื่อพื้นที่ด้านบนให้ตัวเลขไม่ถูกบังหรือโดนตัดขอบ
+                                            const rawMax = Math.max(...cData.map(d => Math.max(...dataKeys.map(k => d[k] || 0))), 10);
+                                            const maxVal = rawMax * 1.25; 
+                                            
+                                            return (
+                                                <div className="bg-white border border-gray-100 p-6 rounded-2xl shadow-md hover:shadow-lg transition-all duration-300 w-full relative overflow-hidden group/card">
+                                                    {/* พื้นหลังตกแต่งความสวยงาม (Glow Effect) */}
+                                                    <div className="absolute top-0 right-0 -mr-8 -mt-8 w-32 h-32 rounded-full bg-gradient-to-br from-gray-50 to-gray-200 opacity-60 blur-2xl pointer-events-none"></div>
+                                                    
+                                                    <h4 className={`font-extrabold mb-2 text-base flex items-center ${titleColor} relative z-10`}>
+                                                        <div className="p-2 bg-gray-50 rounded-lg mr-3 shadow-sm border border-gray-100">
+                                                            <i className={`${icon}`}></i>
+                                                        </div>
+                                                        {title}
+                                                    </h4>
+                                                    
+                                                    {/* แก้ไข pt-6 เป็น pt-28 เพื่อเพิ่มพื้นที่ให้ Tooltip ด้านบน */}
+                                                    <div className="w-full overflow-x-auto pb-4 relative z-10 pt-28">
+                                                        <div className="min-w-[500px] h-[220px] flex items-end gap-5 px-2 mt-2">
+                                                            {cData.map((d, i) => {
+                                                                // คำนวณตำแหน่ง Tooltip ป้องกันไม่ให้ล้นขอบซ้าย/ขวา
+                                                                const isFirst = i === 0 || i === 1;
+                                                                const isLast = i === cData.length - 1 || i === cData.length - 2;
+                                                                const tooltipPos = isFirst ? 'left-0' : (isLast ? 'right-0' : 'left-1/2 -translate-x-1/2');
+                                                                
+                                                                return (
+                                                                <div key={i} className="flex-1 flex flex-col justify-end group relative h-full">
+                                                                    
+                                                                    {/* Tooltip Hover แบบลอย (Floating Tooltip พร้อมกระจกฝ้า ลดขนาดและแก้ขอบล้น) */}
+                                                                    <div className={`absolute bottom-full mb-2 ${tooltipPos} opacity-0 group-hover:opacity-100 pointer-events-none bg-gray-900/95 backdrop-blur-sm text-white text-[9px] p-2 rounded-lg z-50 whitespace-nowrap shadow-xl transition-all duration-200 transform translate-y-2 group-hover:translate-y-0 border border-gray-700`}>
+                                                                        <div className="font-bold text-center border-b border-gray-600 pb-1 mb-1 text-blue-100 text-[10px]">{d.label}</div>
+                                                                        {dataKeys.map((k, idx) => (
+                                                                            <div key={k} className="flex justify-between gap-3 mt-1 items-center">
+                                                                                <span className="flex items-center gap-1.5">
+                                                                                    <span className={`w-3.5 h-3.5 rounded-full border-[1px] border-white shadow-sm ${colors[idx]}`}></span> 
+                                                                                    {labels[idx]}
+                                                                                </span> 
+                                                                                <span className="font-bold text-[11px] text-white">{d[k]}</span>
+                                                                            </div>
+                                                                        ))}
+                                                                    </div>
+                                                                    
+                                                                    {/* พื้นที่แท่งกราฟ */}
+                                                                    <div className="w-full flex items-end justify-center h-[calc(100%-30px)] gap-1 border-b-2 border-gray-100 pb-1">
+                                                                        {dataKeys.map((k, idx) => {
+                                                                            const barHeight = (d[k] / maxVal) * 100;
+                                                                            return (
+                                                                                <div key={k} 
+                                                                                     className={`w-full ${colors[idx]} rounded-t-md transition-all duration-500 relative flex justify-center items-start shadow-sm group-hover:brightness-110 group-hover:-translate-y-1`} 
+                                                                                     style={{ height: `${barHeight}%`, minHeight: d[k] > 0 ? '4px' : '0' }}>
+                                                                                    
+                                                                                    {/* ตัวเลขบนแท่งกราฟ */}
+                                                                                    {d[k] > 0 && (
+                                                                                        <span className="absolute -top-6 text-[11px] font-bold text-gray-500 transform transition-all group-hover:text-gray-800 group-hover:scale-110 drop-shadow-sm">
+                                                                                            {d[k]}
+                                                                                        </span>
+                                                                                    )}
+                                                                                </div>
+                                                                            );
+                                                                        })}
+                                                                    </div>
+                                                                    
+                                                                    {/* ป้ายกำกับแกน X (วันที่) */}
+                                                                    <div className="text-center text-[10px] mt-3 text-gray-400 font-bold h-[25px] flex items-center justify-center leading-tight group-hover:text-gray-700 transition-colors">
+                                                                        {d.label}
+                                                                    </div>
+                                                                </div>
+                                                            )})}
+                                                        </div>
+                                                    </div>
+                                                    
+                                                    {/* คำอธิบายสีกราฟ (Legend) */}
+                                                    <div className="flex flex-wrap justify-center gap-3 mt-2 pt-4 border-t border-dashed border-gray-200 text-[11px] text-gray-700 font-bold relative z-10">
+                                                        {labels.map((lbl, idx) => (
+                                                            <span key={lbl} className="flex items-center bg-gray-50 px-3 py-1.5 rounded-full shadow-sm border border-gray-200 hover:bg-white transition-colors cursor-default">
+                                                                {/* ใช้ colors[idx] โดยตรงเพื่อให้พื้นหลังแสดงผลครบถ้วน */}
+                                                                <span className={`w-3.5 h-3.5 rounded-full mr-2 shadow-sm border-[1px] border-white ${colors[idx]}`}></span>{lbl}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            );
+                                        };
+
+                                        return (
+                                            <div className="grid grid-cols-1 gap-8">
+                                                {renderMiniChart('สถิติบันทึกเข้า-ออก', 'fas fa-sign-in-alt', 'text-blue-700', ['inCount', 'outCount'], ['bg-gradient-to-t from-blue-600 to-blue-400', 'bg-gradient-to-t from-indigo-600 to-indigo-400'], ['บันทึกเข้า', 'บันทึกออก'])}
+                                                {renderMiniChart('สถิติไม่บันทึกเข้า-ออก', 'fas fa-user-times', 'text-gray-700', ['noInCount', 'noOutCount'], ['bg-gradient-to-t from-gray-500 to-gray-400', 'bg-gradient-to-t from-slate-700 to-slate-500'], ['ไม่บันทึกเข้า', 'ไม่บันทึกออก'])}
+                                                {renderMiniChart('สถิติการลา', 'fas fa-notes-medical', 'text-orange-600', ['sickCount', 'personalCount', 'activityCount'], ['bg-gradient-to-t from-orange-500 to-orange-400', 'bg-gradient-to-t from-purple-500 to-purple-400', 'bg-gradient-to-t from-teal-500 to-teal-400'], ['ลาป่วย', 'ลากิจ', 'ไปกิจกรรม'])}
+                                                {renderMiniChart('สถิติมาสาย', 'fas fa-clock', 'text-red-600', ['lateCount'], ['bg-gradient-to-t from-red-600 to-red-400 shadow-[0_0_10px_rgba(220,38,38,0.5)]'], ['มาสาย'])}
+                                            </div>
+                                        );
+                                    })()}
+                                </div>
                             </div>
                         )}
 
@@ -11216,122 +11473,325 @@
                         )}
 
                         {activeTab === 'absent_stats' && (
-                            <div className="overflow-x-auto">
-                                {(()=>{
-                                    const roomStats = {};
-                                    let maxChartVal = 0;
-                                    combinedStatsData.forEach(stu => {
-                                        if (stu.absent > 0 || stu.skip > 0) {
-                                            let rKey = String(stu.fullRoom).trim();
-                                            if (!rKey.startsWith('ม.') && rKey !== 'ไม่ระบุ') rKey = `ม.${rKey}`;
-                                            if (!roomStats[rKey]) roomStats[rKey] = { room: rKey, absent: 0, skip: 0, stuCount: 0 };
-                                            roomStats[rKey].absent += stu.absent;
-                                            roomStats[rKey].skip += stu.skip;
-                                            roomStats[rKey].stuCount += 1;
-                                        }
-                                    });
-                                    Object.values(roomStats).forEach(stat => {
-                                        const total = stat.absent + stat.skip;
-                                        if (total > maxChartVal) maxChartVal = total;
-                                    });
-                                    const roomStatsArray = Object.values(roomStats).sort((a,b) => {
-                                        const matchA = a.room.match(/ม\.(\d+)\/(\d+)/);
-                                        const matchB = b.room.match(/ม\.(\d+)\/(\d+)/);
-                                        if (matchA && matchB) {
-                                            if (matchA[1] !== matchB[1]) return Number(matchA[1]) - Number(matchB[1]);
-                                            return Number(matchA[2]) - Number(matchB[2]);
-                                        }
-                                        return a.room.localeCompare(b.room);
-                                    });
+                            <div className="space-y-6">
+                                {/* แดชบอร์ดกราฟเปรียบเทียบ (หน้าสถิติขาด/หนีเรียน) */}
+                                <div className="bg-white border border-gray-200 p-4 md:p-6 rounded-xl shadow-sm mt-6">
+                                    <div className="flex flex-col md:flex-row justify-between items-center mb-6 border-b pb-4 gap-4">
+                                        <h3 className="font-bold text-gray-800 text-lg w-full md:w-auto">
+                                            <i className="fa-solid fa-chart-line text-orange-600 mr-2"></i> กราฟแนวโน้มสถิติ การมาเรียน/ลา/ขาด/หนี
+                                        </h3>
+                                        <div className="flex bg-gray-100 p-1 rounded-lg w-full md:w-auto overflow-x-auto no-print">
+                                            <button onClick={() => setChartRangeAbs('1week')} className={`flex-1 md:flex-none px-4 py-1.5 text-sm font-bold rounded-md transition whitespace-nowrap ${chartRangeAbs === '1week' ? 'bg-white shadow text-orange-600' : 'text-gray-500 hover:text-gray-700'}`}>1 สัปดาห์</button>
+                                            <button onClick={() => setChartRangeAbs('1month')} className={`flex-1 md:flex-none px-4 py-1.5 text-sm font-bold rounded-md transition whitespace-nowrap ${chartRangeAbs === '1month' ? 'bg-white shadow text-orange-600' : 'text-gray-500 hover:text-gray-700'}`}>1 เดือน</button>
+                                            <button onClick={() => setChartRangeAbs('1year')} className={`flex-1 md:flex-none px-4 py-1.5 text-sm font-bold rounded-md transition whitespace-nowrap ${chartRangeAbs === '1year' ? 'bg-white shadow text-orange-600' : 'text-gray-500 hover:text-gray-700'}`}>1 ปี</button>
+                                        </div>
+                                    </div>
 
-                                    const totalStudents = combinedStatsData.length;
-                                    const totalAbsentStudents = combinedStatsData.filter(s => s.absent > 0).length;
-                                    const totalSkipStudents = combinedStatsData.filter(s => s.skip > 0).length;
-                                    const absentPercent = totalStudents > 0 ? ((totalAbsentStudents / totalStudents) * 100).toFixed(2) : 0;
-                                    const skipPercent = totalStudents > 0 ? ((totalSkipStudents / totalStudents) * 100).toFixed(2) : 0;
+                                    {(() => {
+                                        if (isFetchingMsRisk) {
+                                            return (
+                                                <div className="p-10 text-center text-gray-500 flex flex-col items-center justify-center bg-gray-50 rounded-xl border border-gray-100">
+                                                    <i className="fa-solid fa-spinner fa-spin text-4xl mb-3 text-orange-500"></i>
+                                                    <p className="font-bold">กำลังดึงข้อมูลการเช็คชื่อเข้าเรียน...</p>
+                                                </div>
+                                            );
+                                        }
+                                        if (classAttRecords.length === 0) {
+                                            return (
+                                                <div className="p-10 text-center text-gray-500 flex flex-col items-center justify-center bg-gray-50 rounded-xl border border-dashed border-gray-300">
+                                                    <i className="fa-solid fa-chart-column text-4xl mb-3 text-gray-300"></i>
+                                                    <p className="font-bold">กรุณากดปุ่ม <span className="text-red-600 px-2">ดึงข้อมูลประมวลผล</span> ด้านบน เพื่อดูกราฟสถิติการเช็คชื่อเข้าเรียน</p>
+                                                </div>
+                                            );
+                                        }
 
-                                    return (
-                                    <React.Fragment>
-                                        <div className="mb-4 bg-orange-50 border border-orange-200 p-4 rounded-lg print:bg-transparent print:border-none print:p-0 flex justify-between items-center">
-                                            <div>
-                                                <h3 className="font-bold text-orange-800 text-lg text-left"><i className="fa-solid fa-chart-line mr-2"></i> สรุปสถิติการขาดเรียนและหนีเรียน (แยกตามห้อง)</h3>
-                                                <p className="text-sm text-orange-700 mt-1 text-left">
-                                                    สรุปยอดรวมจำนวนคาบที่ขาดและหนีเรียนของนักเรียน <strong>{(classFilter && roomFilter) ? `ชั้น ${classFilter}/${roomFilter}` : 'ทุกชั้นเรียน'}</strong>
-                                                </p>
+                                        const filteredStudentsAbs = (students || []).filter(s => {
+                                            const matchClass = classFilter ? s.classLevel === classFilter : true;
+                                            const matchRoom = roomFilter ? s.room === roomFilter : true;
+                                            return matchClass && matchRoom;
+                                        });
+
+                                        const todayDt = new Date();
+                                        const cData = [];
+                                        
+                                        // กรอง records ให้ตรงกับชั้น/ห้องที่เลือก
+                                        const allAtt = (classAttRecords || []).filter(r => {
+                                            if (!classFilter && !roomFilter) return true;
+                                            return filteredStudentsAbs.some(s => String(s.code) === String(r.studentId));
+                                        }).map(r => ({...r, displayDate: formatDisplayDate(r.date)}));
+
+                                        const getThaiShortMonth = (m) => ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'][m];
+
+                                        if (chartRangeAbs === '1week') {
+                                            for (let i = 6; i >= 0; i--) {
+                                                const d = new Date(todayDt.getTime() - i * 86400000);
+                                                const dateStr = getBEStrSafe(d);
+                                                const dayLabel = `${d.getDate()} ${getThaiShortMonth(d.getMonth())}`;
+                                                
+                                                const dayAtt = allAtt.filter(r => r.displayDate === dateStr);
+                                                
+                                                const presentCount = dayAtt.filter(r => ['มา', '✓'].includes(r.status)).length;
+                                                const lateCount = dayAtt.filter(r => ['สาย', 'ส'].includes(r.status)).length;
+                                                const absentCount = dayAtt.filter(r => ['ขาด', 'ข'].includes(r.status)).length;
+                                                const sickCount = dayAtt.filter(r => ['ลาป่วย', 'ลป'].includes(r.status)).length;
+                                                const personalCount = dayAtt.filter(r => ['ลากิจ', 'ลก'].includes(r.status)).length;
+                                                const activityCount = dayAtt.filter(r => ['ไปกิจกรรม', 'ก'].includes(r.status)).length;
+                                                const skipCount = dayAtt.filter(r => ['หนีเรียน', 'น'].includes(r.status)).length;
+                                                
+                                                cData.push({ label: dayLabel, presentCount, lateCount, absentCount, sickCount, personalCount, skipCount, activityCount });
+                                            }
+                                        } else if (chartRangeAbs === '1month') {
+                                            let daysArr = [];
+                                            for (let i = 27; i >= 0; i--) daysArr.push(new Date(todayDt.getTime() - i * 86400000));
+                                            
+                                            for (let i = 0; i < daysArr.length; i += 7) {
+                                                const chunk = daysArr.slice(i, i + 7);
+                                                const startD = chunk[0];
+                                                const endD = chunk[chunk.length - 1];
+                                                const label = `${startD.getDate()} ${getThaiShortMonth(startD.getMonth())} - ${endD.getDate()} ${getThaiShortMonth(endD.getMonth())}`;
+                                                
+                                                let tRecs = [];
+                                                chunk.forEach(d => {
+                                                    const dateStr = getBEStrSafe(d);
+                                                    tRecs = tRecs.concat(allAtt.filter(r => r.displayDate === dateStr));
+                                                });
+
+                                                const presentCount = tRecs.filter(r => ['มา', '✓'].includes(r.status)).length;
+                                                const lateCount = tRecs.filter(r => ['สาย', 'ส'].includes(r.status)).length;
+                                                const absentCount = tRecs.filter(r => ['ขาด', 'ข'].includes(r.status)).length;
+                                                const sickCount = tRecs.filter(r => ['ลาป่วย', 'ลป'].includes(r.status)).length;
+                                                const personalCount = tRecs.filter(r => ['ลากิจ', 'ลก'].includes(r.status)).length;
+                                                const activityCount = tRecs.filter(r => ['ไปกิจกรรม', 'ก'].includes(r.status)).length;
+                                                const skipCount = tRecs.filter(r => ['หนีเรียน', 'น'].includes(r.status)).length;
+                                                
+                                                cData.push({ label: label, presentCount, lateCount, absentCount, sickCount, personalCount, skipCount, activityCount });
+                                            }
+                                        } else {
+                                            for (let i = 11; i >= 0; i--) {
+                                                const d = new Date(todayDt.getFullYear(), todayDt.getMonth() - i, 1);
+                                                const m = d.getMonth() + 1;
+                                                const y = d.getFullYear() + 543;
+                                                const monthLabel = `${getThaiShortMonth(d.getMonth())} ${y.toString().slice(-2)}`;
+                                                const monthSuffix = `/${String(m).padStart(2,'0')}/${y}`;
+                                                
+                                                const tRecs = allAtt.filter(r => r.displayDate && r.displayDate.endsWith(monthSuffix));
+                                                
+                                                const presentCount = tRecs.filter(r => ['มา', '✓'].includes(r.status)).length;
+                                                const lateCount = tRecs.filter(r => ['สาย', 'ส'].includes(r.status)).length;
+                                                const absentCount = tRecs.filter(r => ['ขาด', 'ข'].includes(r.status)).length;
+                                                const sickCount = tRecs.filter(r => ['ลาป่วย', 'ลป'].includes(r.status)).length;
+                                                const personalCount = tRecs.filter(r => ['ลากิจ', 'ลก'].includes(r.status)).length;
+                                                const activityCount = tRecs.filter(r => ['ไปกิจกรรม', 'ก'].includes(r.status)).length;
+                                                const skipCount = tRecs.filter(r => ['หนีเรียน', 'น'].includes(r.status)).length;
+                                                
+                                                cData.push({ label: monthLabel, presentCount, lateCount, absentCount, sickCount, personalCount, skipCount, activityCount });
+                                            }
+                                        }
+
+                                        const renderAbsChart = (title, icon, titleColor, dataKeys, colors, labels) => {
+                                            const rawMax = Math.max(...cData.map(d => Math.max(...dataKeys.map(k => d[k] || 0))), 10);
+                                            const maxVal = rawMax * 1.25; 
+                                            
+                                            return (
+                                                <div className="bg-white border border-gray-100 p-6 rounded-2xl shadow-md hover:shadow-lg transition-all duration-300 w-full relative overflow-hidden group/card">
+                                                    <div className="absolute top-0 right-0 -mr-8 -mt-8 w-32 h-32 rounded-full bg-gradient-to-br from-gray-50 to-gray-200 opacity-60 blur-2xl pointer-events-none"></div>
+                                                    
+                                                    <h4 className={`font-extrabold mb-2 text-base flex items-center ${titleColor} relative z-10`}>
+                                                        <div className="p-2 bg-gray-50 rounded-lg mr-3 shadow-sm border border-gray-100">
+                                                            <i className={`${icon}`}></i>
+                                                        </div>
+                                                        {title}
+                                                    </h4>
+                                                    
+                                                    <div className="w-full overflow-x-auto pb-4 relative z-10 pt-28">
+                                                        <div className="min-w-[500px] h-[220px] flex items-end gap-5 px-2 mt-2">
+                                                            {cData.map((d, i) => {
+                                                                const isFirst = i === 0 || i === 1;
+                                                                const isLast = i === cData.length - 1 || i === cData.length - 2;
+                                                                const tooltipPos = isFirst ? 'left-0' : (isLast ? 'right-0' : 'left-1/2 -translate-x-1/2');
+                                                                
+                                                                return (
+                                                                <div key={i} className="flex-1 flex flex-col justify-end group relative h-full">
+                                                                    
+                                                                    <div className={`absolute bottom-full mb-2 ${tooltipPos} opacity-0 group-hover:opacity-100 pointer-events-none bg-gray-900/95 backdrop-blur-sm text-white text-[9px] p-2 rounded-lg z-50 whitespace-nowrap shadow-xl transition-all duration-200 transform translate-y-2 group-hover:translate-y-0 border border-gray-700`}>
+                                                                        <div className="font-bold text-center border-b border-gray-600 pb-1 mb-1 text-blue-100 text-[10px]">{d.label}</div>
+                                                                        {dataKeys.map((k, idx) => (
+                                                                            <div key={k} className="flex justify-between gap-3 mt-1 items-center">
+                                                                                <span className="flex items-center gap-1.5">
+                                                                                    <span className={`w-3.5 h-3.5 rounded-full border-[1px] border-white shadow-sm ${colors[idx]}`}></span> 
+                                                                                    {labels[idx]}
+                                                                                </span> 
+                                                                                <span className="font-bold text-[11px] text-white">{d[k]}</span>
+                                                                            </div>
+                                                                        ))}
+                                                                    </div>
+                                                                    
+                                                                    <div className="w-full flex items-end justify-center h-[calc(100%-30px)] gap-1 border-b-2 border-gray-100 pb-1">
+                                                                        {dataKeys.map((k, idx) => {
+                                                                            const barHeight = (d[k] / maxVal) * 100;
+                                                                            return (
+                                                                                <div key={k} 
+                                                                                     className={`w-full ${colors[idx]} rounded-t-md transition-all duration-500 relative flex justify-center items-start shadow-sm group-hover:brightness-110 group-hover:-translate-y-1`} 
+                                                                                     style={{ height: `${barHeight}%`, minHeight: d[k] > 0 ? '4px' : '0' }}>
+                                                                                    {d[k] > 0 && (
+                                                                                        <span className="absolute -top-6 text-[11px] font-bold text-gray-500 transform transition-all group-hover:text-gray-800 group-hover:scale-110 drop-shadow-sm">
+                                                                                            {d[k]}
+                                                                                        </span>
+                                                                                    )}
+                                                                                </div>
+                                                                            );
+                                                                        })}
+                                                                    </div>
+                                                                    
+                                                                    <div className="text-center text-[10px] mt-3 text-gray-400 font-bold h-[25px] flex items-center justify-center leading-tight group-hover:text-gray-700 transition-colors">
+                                                                        {d.label}
+                                                                    </div>
+                                                                </div>
+                                                            )})}
+                                                        </div>
+                                                    </div>
+                                                    
+                                                    <div className="flex flex-wrap justify-center gap-3 mt-2 pt-4 border-t border-dashed border-gray-200 text-[11px] text-gray-700 font-bold relative z-10">
+                                                        {labels.map((lbl, idx) => (
+                                                            <span key={lbl} className="flex items-center bg-gray-50 px-3 py-1.5 rounded-full shadow-sm border border-gray-200 hover:bg-white transition-colors cursor-default">
+                                                                <span className={`w-3.5 h-3.5 rounded-full mr-2 shadow-sm border-[1px] border-white ${colors[idx]}`}></span>{lbl}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            );
+                                        };
+
+                                        return (
+                                            <div className="grid grid-cols-1 gap-8">
+                                                {renderAbsChart('สถิติการมาเรียน', 'fas fa-user-check', 'text-emerald-700', ['presentCount'], ['bg-gradient-to-t from-emerald-600 to-emerald-400'], ['มาปกติ'])}
+                                                {renderAbsChart('สถิติมาสาย', 'fas fa-clock', 'text-orange-600', ['lateCount'], ['bg-gradient-to-t from-orange-500 to-orange-400 shadow-[0_0_10px_rgba(249,115,22,0.5)]'], ['มาสาย'])}
+                                                {renderAbsChart('สถิติขาดเรียน', 'fas fa-user-xmark', 'text-red-600', ['absentCount'], ['bg-gradient-to-t from-red-600 to-red-400 shadow-[0_0_10px_rgba(220,38,38,0.5)]'], ['ขาดเรียน'])}
+                                                {renderAbsChart('สถิติการลา', 'fas fa-notes-medical', 'text-blue-600', ['sickCount', 'personalCount'], ['bg-gradient-to-t from-blue-500 to-blue-400', 'bg-gradient-to-t from-purple-500 to-purple-400'], ['ลาป่วย', 'ลากิจ'])}
+                                                {renderAbsChart('สถิติไปกิจกรรม', 'fas fa-flag', 'text-teal-600', ['activityCount'], ['bg-gradient-to-t from-teal-500 to-teal-400'], ['ไปกิจกรรม'])}
+                                                {renderAbsChart('สถิติหนีเรียน', 'fas fa-person-running', 'text-rose-600', ['skipCount'], ['bg-gradient-to-t from-rose-600 to-rose-400 shadow-[0_0_10px_rgba(225,29,72,0.5)]'], ['หนีเรียน'])}
                                             </div>
-                                            {(classFilter && roomFilter) && (
-                                                <div className="text-right text-sm text-gray-600">
-                                                    <strong>ครูที่ปรึกษา:</strong> {getAdvisorName(`${classFilter}/${roomFilter}`)}
+                                        );
+                                    })()}
+                                </div>
+
+                                <div className="overflow-x-auto mt-6">
+                                    {(()=>{
+                                        const roomStats = {};
+                                        let maxChartVal = 0;
+                                        combinedStatsData.forEach(stu => {
+                                            if (stu.absent > 0 || stu.skip > 0) {
+                                                let rKey = String(stu.fullRoom).trim();
+                                                if (!rKey.startsWith('ม.') && rKey !== 'ไม่ระบุ') rKey = `ม.${rKey}`;
+                                                if (!roomStats[rKey]) roomStats[rKey] = { room: rKey, absent: 0, skip: 0, stuCount: 0 };
+                                                roomStats[rKey].absent += stu.absent;
+                                                roomStats[rKey].skip += stu.skip;
+                                                roomStats[rKey].stuCount += 1;
+                                            }
+                                        });
+                                        Object.values(roomStats).forEach(stat => {
+                                            const total = stat.absent + stat.skip;
+                                            if (total > maxChartVal) maxChartVal = total;
+                                        });
+                                        const roomStatsArray = Object.values(roomStats).sort((a,b) => {
+                                            const matchA = a.room.match(/ม\.(\d+)\/(\d+)/);
+                                            const matchB = b.room.match(/ม\.(\d+)\/(\d+)/);
+                                            if (matchA && matchB) {
+                                                if (matchA[1] !== matchB[1]) return Number(matchA[1]) - Number(matchB[1]);
+                                                return Number(matchA[2]) - Number(matchB[2]);
+                                            }
+                                            return a.room.localeCompare(b.room);
+                                        });
+
+                                        const totalStudents = combinedStatsData.length;
+                                        const totalAbsentStudents = combinedStatsData.filter(s => s.absent > 0).length;
+                                        const totalSkipStudents = combinedStatsData.filter(s => s.skip > 0).length;
+                                        const absentPercent = totalStudents > 0 ? ((totalAbsentStudents / totalStudents) * 100).toFixed(2) : 0;
+                                        const skipPercent = totalStudents > 0 ? ((totalSkipStudents / totalStudents) * 100).toFixed(2) : 0;
+
+                                        return (
+                                        <React.Fragment>
+                                            <div className="mb-4 bg-orange-50 border border-orange-200 p-4 rounded-lg print:bg-transparent print:border-none print:p-0 flex justify-between items-center">
+                                                <div>
+                                                    <h3 className="font-bold text-orange-800 text-lg text-left"><i className="fa-solid fa-chart-line mr-2"></i> สรุปสถิติการขาดเรียนและหนีเรียน (แยกตามห้อง)</h3>
+                                                    <p className="text-sm text-orange-700 mt-1 text-left">
+                                                        สรุปยอดรวมจำนวนคาบที่ขาดและหนีเรียนของนักเรียน <strong>{(classFilter && roomFilter) ? `ชั้น ${classFilter}/${roomFilter}` : 'ทุกชั้นเรียน'}</strong>
+                                                    </p>
+                                                </div>
+                                                {(classFilter && roomFilter) && (
+                                                    <div className="text-right text-sm text-gray-600">
+                                                        <strong>ครูที่ปรึกษา:</strong> {getAdvisorName(`${classFilter}/${roomFilter}`)}
+                                                    </div>
+                                                )}
+                                            </div>
+                                            
+                                            <table className="w-full text-sm text-left border-collapse border border-gray-300 mb-8">
+                                                <thead className="bg-gray-100 text-gray-800">
+                                                    <tr>
+                                                        <th className="p-3 border border-gray-300 text-center">ลำดับ</th>
+                                                        <th className="p-3 border border-gray-300 text-center">ระดับชั้น/ห้อง</th>
+                                                        <th className="p-3 border border-gray-300 text-center text-red-600">จำนวนนักเรียนที่มีประวัติ (คน)</th>
+                                                        <th className="p-3 border border-gray-300 text-center text-red-600">รวมขาดเรียน (คาบ)</th>
+                                                        <th className="p-3 border border-gray-300 text-center text-rose-600">รวมหนีเรียน (คาบ)</th>
+                                                        <th className="p-3 border border-gray-300 text-center font-bold text-orange-800">รวมทั้งหมด (คาบ)</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {isFetchingMsRisk ? (
+                                                        <tr><td colSpan="6" className="p-8 text-center text-gray-500"><i className="fa-solid fa-spinner fa-spin text-3xl mb-2"></i><br/>กำลังประมวลผลสถิติ...</td></tr>
+                                                    ) : roomStatsArray.length > 0 ? (
+                                                        roomStatsArray.map((stat, index) => (
+                                                            <tr key={stat.room} className="hover:bg-orange-50 transition border-b border-gray-200">
+                                                                <td className="p-3 border border-gray-300 text-center text-gray-500">{index + 1}</td>
+                                                                <td className="p-3 border border-gray-300 text-center font-bold text-ns-blue">ชั้น {stat.room}</td>
+                                                                <td className="p-3 border border-gray-300 text-center font-medium">{stat.stuCount}</td>
+                                                                <td className="p-3 border border-gray-300 text-center text-red-600 font-bold">{stat.absent > 0 ? stat.absent : '-'}</td>
+                                                                <td className="p-3 border border-gray-300 text-center text-rose-600 font-bold">{stat.skip > 0 ? stat.skip : '-'}</td>
+                                                                <td className="p-3 border border-gray-300 text-center font-bold text-orange-800 bg-orange-50 print:bg-transparent">{stat.absent + stat.skip}</td>
+                                                            </tr>
+                                                        ))
+                                                    ) : (
+                                                        <tr><td colSpan="6" className="p-10 text-center text-gray-400">ไม่มีสถิติการขาด/หนีเรียนตามเงื่อนไข</td></tr>
+                                                    )}
+                                                </tbody>
+                                            </table>
+
+                                            {roomStatsArray.length > 0 && !isFetchingMsRisk && (
+                                                <div className="mt-6 bg-white border border-gray-200 p-6 rounded-lg shadow-sm">
+                                                    <h4 className="font-bold text-gray-800 mb-4 text-center border-b pb-2"><i className="fa-solid fa-chart-bar text-ns-blue mr-2"></i> กราฟเปรียบเทียบสถิติ ขาด/หนีเรียน (คาบ)</h4>
+                                                    <div className="flex flex-col gap-3 mt-4">
+                                                        {roomStatsArray.map(stat => {
+                                                            const total = stat.absent + stat.skip;
+                                                            const absentWidth = total > 0 ? (stat.absent / maxChartVal) * 100 : 0;
+                                                            const skipWidth = total > 0 ? (stat.skip / maxChartVal) * 100 : 0;
+                                                            return (
+                                                                <div key={stat.room} className="flex items-center gap-4">
+                                                                    <div className="w-20 text-right text-sm font-bold text-gray-700">ชั้น {stat.room}</div>
+                                                                    <div className="flex-1 flex h-6 bg-gray-100 rounded overflow-hidden" style={{ display: 'flex' }}>
+                                                                        {stat.absent > 0 && <div style={{width: `${absentWidth}%`, backgroundColor: '#ef4444', color: 'white'}} className="h-full text-[10px] flex items-center justify-center font-bold" title={`ขาด: ${stat.absent}`}>{stat.absent}</div>}
+                                                                        {stat.skip > 0 && <div style={{width: `${skipWidth}%`, backgroundColor: '#003366', color: 'white'}} className="h-full text-[10px] flex items-center justify-center font-bold" title={`หนี: ${stat.skip}`}>{stat.skip}</div>}
+                                                                    </div>
+                                                                    <div className="w-10 text-xs font-bold text-gray-500 text-center">{total}</div>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                    <div className="flex justify-center gap-6 mt-6 pt-4 border-t text-sm font-bold text-gray-700">
+                                                        <span className="flex items-center">
+                                                            <span className="w-3 h-3 rounded-full mr-2 print:border print:border-red-500" style={{backgroundColor: '#ef4444', WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact'}}></span> 
+                                                            ร้อยละนักเรียนที่ขาดเรียน {absentPercent}%
+                                                        </span>
+                                                        <span className="flex items-center">
+                                                            <span className="w-3 h-3 rounded-full mr-2 print:border print:border-blue-900" style={{backgroundColor: '#003366', WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact'}}></span> 
+                                                            ร้อยละนักเรียนที่หนีเรียน {skipPercent}%
+                                                        </span>
+                                                    </div>
                                                 </div>
                                             )}
-                                        </div>
-                                        
-                                        <table className="w-full text-sm text-left border-collapse border border-gray-300 mb-8">
-                                            <thead className="bg-gray-100 text-gray-800">
-                                                <tr>
-                                                    <th className="p-3 border border-gray-300 text-center">ลำดับ</th>
-                                                    <th className="p-3 border border-gray-300 text-center">ระดับชั้น/ห้อง</th>
-                                                    <th className="p-3 border border-gray-300 text-center text-red-600">จำนวนนักเรียนที่มีประวัติ (คน)</th>
-                                                    <th className="p-3 border border-gray-300 text-center text-red-600">รวมขาดเรียน (คาบ)</th>
-                                                    <th className="p-3 border border-gray-300 text-center text-rose-600">รวมหนีเรียน (คาบ)</th>
-                                                    <th className="p-3 border border-gray-300 text-center font-bold text-orange-800">รวมทั้งหมด (คาบ)</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {isFetchingMsRisk ? (
-                                                    <tr><td colSpan="6" className="p-8 text-center text-gray-500"><i className="fa-solid fa-spinner fa-spin text-3xl mb-2"></i><br/>กำลังประมวลผลสถิติ...</td></tr>
-                                                ) : roomStatsArray.length > 0 ? (
-                                                    roomStatsArray.map((stat, index) => (
-                                                        <tr key={stat.room} className="hover:bg-orange-50 transition border-b border-gray-200">
-                                                            <td className="p-3 border border-gray-300 text-center text-gray-500">{index + 1}</td>
-                                                            <td className="p-3 border border-gray-300 text-center font-bold text-ns-blue">ชั้น {stat.room}</td>
-                                                            <td className="p-3 border border-gray-300 text-center font-medium">{stat.stuCount}</td>
-                                                            <td className="p-3 border border-gray-300 text-center text-red-600 font-bold">{stat.absent > 0 ? stat.absent : '-'}</td>
-                                                            <td className="p-3 border border-gray-300 text-center text-rose-600 font-bold">{stat.skip > 0 ? stat.skip : '-'}</td>
-                                                            <td className="p-3 border border-gray-300 text-center font-bold text-orange-800 bg-orange-50 print:bg-transparent">{stat.absent + stat.skip}</td>
-                                                        </tr>
-                                                    ))
-                                                ) : (
-                                                    <tr><td colSpan="6" className="p-10 text-center text-gray-400">ไม่มีสถิติการขาด/หนีเรียนตามเงื่อนไข</td></tr>
-                                                )}
-                                            </tbody>
-                                        </table>
-
-                                        {roomStatsArray.length > 0 && !isFetchingMsRisk && (
-                                            <div className="mt-6 bg-white border border-gray-200 p-6 rounded-lg shadow-sm">
-                                                <h4 className="font-bold text-gray-800 mb-4 text-center border-b pb-2"><i className="fa-solid fa-chart-bar text-ns-blue mr-2"></i> กราฟเปรียบเทียบสถิติ ขาด/หนีเรียน (คาบ)</h4>
-                                                <div className="flex flex-col gap-3 mt-4">
-                                                    {roomStatsArray.map(stat => {
-                                                        const total = stat.absent + stat.skip;
-                                                        const absentWidth = total > 0 ? (stat.absent / maxChartVal) * 100 : 0;
-                                                        const skipWidth = total > 0 ? (stat.skip / maxChartVal) * 100 : 0;
-                                                        return (
-                                                            <div key={stat.room} className="flex items-center gap-4">
-                                                                <div className="w-20 text-right text-sm font-bold text-gray-700">ชั้น {stat.room}</div>
-                                                                <div className="flex-1 flex h-6 bg-gray-100 rounded overflow-hidden" style={{ display: 'flex' }}>
-                                                                    {stat.absent > 0 && <div style={{width: `${absentWidth}%`, backgroundColor: '#ef4444', color: 'white'}} className="h-full text-[10px] flex items-center justify-center font-bold" title={`ขาด: ${stat.absent}`}>{stat.absent}</div>}
-                                                                    {stat.skip > 0 && <div style={{width: `${skipWidth}%`, backgroundColor: '#003366', color: 'white'}} className="h-full text-[10px] flex items-center justify-center font-bold" title={`หนี: ${stat.skip}`}>{stat.skip}</div>}
-                                                                </div>
-                                                                <div className="w-10 text-xs font-bold text-gray-500 text-center">{total}</div>
-                                                            </div>
-                                                        );
-                                                    })}
-                                                </div>
-                                                <div className="flex justify-center gap-6 mt-6 pt-4 border-t text-sm font-bold text-gray-700">
-                                                    <span className="flex items-center">
-                                                        <span className="w-3 h-3 rounded-full mr-2 print:border print:border-red-500" style={{backgroundColor: '#ef4444', WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact'}}></span> 
-                                                        ร้อยละนักเรียนที่ขาดเรียน {absentPercent}%
-                                                    </span>
-                                                    <span className="flex items-center">
-                                                        <span className="w-3 h-3 rounded-full mr-2 print:border print:border-blue-900" style={{backgroundColor: '#003366', WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact'}}></span> 
-                                                        ร้อยละนักเรียนที่หนีเรียน {skipPercent}%
-                                                    </span>
-                                                </div>
-                                            </div>
-                                        )}
-                                    </React.Fragment>
-                                    );
-                                })()}
+                                        </React.Fragment>
+                                        );
+                                    })()}
+                                </div>
                             </div>
                         )}
 
