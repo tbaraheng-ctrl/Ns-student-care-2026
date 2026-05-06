@@ -3201,41 +3201,57 @@
             );
         };
 
-        // 8. หน้าจัดการข้อมูลนักเรียน (StudentManager) - ดึงข้อมูลและบันทึกลง Sheet จริง
+     // 8. หน้าจัดการข้อมูลนักเรียน (StudentManager) - ดึงข้อมูลและบันทึกลง Sheet จริง
         const StudentManager = ({ students, setStudents, provincesData, isSyncing, onRefresh, schoolConfig, user }) => {
             
-            const [formData, setFormData] = useState({
+            // เพิ่มฟิลด์ใหม่เข้าไปใน State เริ่มต้น
+            const initialFormState = {
                 id: '', photoBase64: '', code: '', name: '', classLevel: '', room: '', program: '',
-                nationalId: '', religion: '', studentTel: '', // ฟิลด์ใหม่
+                nationalId: '', religion: '', studentTel: '',
                 dob: '', age: '', advisor: '', addrNo: '', addrMoo: '', addrProv: '', addrDist: '',
-                addrSub: '', addrZip: '', address: '', parentName: '', parentTel: ''
-            });
+                addrSub: '', addrZip: '', address: '', parentName: '', parentTel: '',
+                // ข้อมูลสุขภาพ
+                weight: '', height: '', bmi: '', bmiTranslation: '',
+                hasCongenitalDisease: 'ไม่มี', congenitalDisease: '', regularMedicine: '',
+                hasDisability: 'ไม่มี', disability: '',
+                // ข้อมูลผู้ปกครองเพิ่มเติม
+                parentRelation: '', parentOccupation: '', parentWorkplace: '', parentIncome: '', parentUnemployed: false,
+                // ข้อมูลบิดามารดา (ใหม่)
+                fatherName: '', fatherTel: '', fatherOccupation: '', fatherIncome: '', fatherUnemployed: false,
+                motherName: '', motherTel: '', motherOccupation: '', motherIncome: '', motherUnemployed: false,
+                parentsStatus: '', livingWith: ''
+            };
+
+            const [formData, setFormData] = useState(initialFormState);
             
             const [searchTerm, setSearchTerm] = useState('');
             const [filterClass, setFilterClass] = useState('');
             const [filterRoom, setFilterRoom] = useState('');
             const [isSaving, setIsSaving] = useState(false);
 
-            // --- เพิ่ม State สำหรับการเลื่อนชั้น และ ครูที่ปรึกษา ---
+            // --- State สำหรับการเลื่อนชั้น และ ครูที่ปรึกษา ---
             const [promoteModalOpen, setPromoteModalOpen] = useState(false);
             const [isPromoting, setIsPromoting] = useState(false);
             const [promoteProgress, setPromoteProgress] = useState('');
             const [teacherList, setTeacherList] = useState([]);
 
-            // โหลดข้อมูลครูมาเก็บไว้เพื่อใช้เทียบครูที่ปรึกษาอัตโนมัติ
+            // --- State สำหรับระบบ Print Preview ---
+            const [printData, setPrintData] = useState(null);
+
+            // ตัวเลือกมาตรฐานสำหรับโรคและ ความพิการ
+            const commonDiseases = ['โรคหอบหืด', 'ภูมิแพ้', 'โรคหัวใจ', 'โรคลมชัก', 'เบาหวาน', 'โรคกระเพาะ', 'G6PD', 'ไทรอยด์'];
+            const commonDisabilities = ['ทางการเห็น', 'ทางการได้ยิน', 'ทางร่างกายหรือการเคลื่อนไหว', 'ทางสติปัญญา', 'ออทิสติก', 'บกพร่องทางการเรียนรู้'];
+
             useEffect(() => {
-                callGAS('getTeachers').then(res => {
-                    if(res.status === 'success') setTeacherList(res.data || []);
-                }).catch(e => console.error(e));
+                if (typeof callGAS === 'function') {
+                    callGAS('getTeachers').then(res => {
+                        if(res.status === 'success') setTeacherList(res.data || []);
+                    }).catch(e => console.error(e));
+                }
             }, []);
 
             const clearForm = () => {
-                setFormData({
-                    id: '', photoBase64: '', code: '', name: '', classLevel: '', room: '', program: '',
-                    nationalId: '', religion: '', studentTel: '',
-                    dob: '', age: '', advisor: '', addrNo: '', addrMoo: '', addrProv: '', addrDist: '',
-                    addrSub: '', addrZip: '', address: '', parentName: '', parentTel: ''
-                });
+                setFormData(initialFormState);
             };
 
             const calculateAge = (dob) => {
@@ -3256,9 +3272,8 @@
                 return parts.join(' ');
             };
 
-            // --- ฟอร์แมตเลขบัตรประชาชน (13 หลัก) ---
             const handleNationalIdChange = (e) => {
-                let val = e.target.value.replace(/\D/g, ''); // บังคับตัวเลขเท่านั้น
+                let val = e.target.value.replace(/\D/g, ''); 
                 if (val.length > 13) val = val.slice(0, 13);
                 let formatted = '';
                 for (let i = 0; i < val.length; i++) {
@@ -3268,9 +3283,8 @@
                 setFormData(prev => ({ ...prev, nationalId: formatted }));
             };
 
-            // --- ฟอร์แมตเบอร์โทรศัพท์ (มีขีดอัตโนมัติ) ---
             const handlePhoneChange = (e, field) => {
-                let val = e.target.value.replace(/\D/g, ''); // บังคับตัวเลขเท่านั้น
+                let val = e.target.value.replace(/\D/g, ''); 
                 if (val.length > 10) val = val.slice(0, 10);
                 let formatted = '';
                 for (let i = 0; i < val.length; i++) {
@@ -3281,7 +3295,10 @@
             };
 
             const handleChange = (e) => {
-                const { name, value } = e.target;
+                const target = e.target;
+                const value = target.type === 'checkbox' ? target.checked : target.value;
+                const name = target.name;
+                
                 let newForm = { ...formData, [name]: value };
 
                 if (name === 'dob') {
@@ -3293,11 +3310,124 @@
                     const newRoom = name === 'room' ? value : newForm.room;
                     
                     if(newClass && newRoom) {
-                        newForm.program = newClass.startsWith('ม.4') || newClass.startsWith('ม.5') || newClass.startsWith('ม.6') ? 'วิทย์-คณิต' : 'ทั่วไป';
+                        let autoProgram = '';
                         
-                        // ค้นหาครูที่ปรึกษาอัตโนมัติตามชั้น/ห้อง (รองรับหลายคน คั่นด้วยลูกน้ำ)
+                        // 💡 ระบบดึงแผนการเรียนอัตโนมัติจาก JSON ของ schoolConfig.learning_plans
+                        if (schoolConfig && schoolConfig.learning_plans) {
+                            const searchTarget = `${newClass}/${newRoom}`.trim();
+                            // แยกข้อมูลเป็นบรรทัดตาม \n
+                            const lines = String(schoolConfig.learning_plans).split('\n');
+                            for (let line of lines) {
+                                const parts = line.split(':');
+                                if (parts.length >= 2) {
+                                    const progName = parts[0].trim();
+                                    const roomsStr = parts.slice(1).join(':').trim();
+                                    const rooms = roomsStr.split(',').map(r => r.trim());
+                                    // หากพบข้อมูลชั้น/ห้อง ในแผนการเรียนนี้ ให้ดึงชื่อแผนมาใช้งาน
+                                    if (rooms.includes(searchTarget)) {
+                                        autoProgram = progName;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        // หากตรวจสอบแล้วพบแผนการเรียน ให้บันทึกลงใน Form
+                        if (autoProgram) {
+                            newForm.program = autoProgram;
+                        } else {
+                            // ค่าพื้นฐาน (Fallback) หากยังไม่ได้ตั้งค่าจากหลังบ้านหรือหาไม่เจอ
+                            newForm.program = newClass.startsWith('ม.4') || newClass.startsWith('ม.5') || newClass.startsWith('ม.6') ? 'วิทย์-คณิต' : 'ทั่วไป';
+                        }
+                        
                         const advisorMatches = teacherList.filter(t => String(t.classLevel).trim() === newClass && String(t.room).trim() === String(newRoom));
                         newForm.advisor = advisorMatches.length > 0 ? advisorMatches.map(t => t.name).join(', ') : '';
+                    }
+                }
+
+                if (name === 'weight' || name === 'height') {
+                    const w = parseFloat(name === 'weight' ? value : newForm.weight);
+                    const h = parseFloat(name === 'height' ? value : newForm.height);
+                    if (w > 0 && h > 0) {
+                        const bmiVal = w / Math.pow(h / 100, 2);
+                        newForm.bmi = bmiVal.toFixed(2);
+                        
+                        if (bmiVal < 18.5) newForm.bmiTranslation = 'น้ำหนักน้อย / ผอม';
+                        else if (bmiVal >= 18.5 && bmiVal <= 22.9) newForm.bmiTranslation = 'ปกติ (สุขภาพดี)';
+                        else if (bmiVal >= 23.0 && bmiVal <= 24.9) newForm.bmiTranslation = 'ท้วม / โรคอ้วนระดับ 1';
+                        else if (bmiVal >= 25.0 && bmiVal <= 29.9) newForm.bmiTranslation = 'อ้วน / โรคอ้วนระดับ 2';
+                        else newForm.bmiTranslation = 'อ้วนมาก / โรคอ้วนระดับ 3';
+                    } else {
+                        newForm.bmi = '';
+                        newForm.bmiTranslation = '';
+                    }
+                }
+
+                if (name === 'hasCongenitalDisease' && value === 'ไม่มี') {
+                    newForm.congenitalDisease = '';
+                }
+                if (name === 'hasDisability' && value === 'ไม่มี') {
+                    newForm.disability = '';
+                }
+
+                // การจัดการติ๊กไม่ได้ประกอบอาชีพ - ผู้ปกครองหลัก
+                if (name === 'parentUnemployed') {
+                    if (value === true) {
+                        newForm.parentOccupation = 'ไม่ได้ประกอบอาชีพ';
+                        newForm.parentWorkplace = '-';
+                        newForm.parentIncome = '-';
+                    } else {
+                        if (newForm.parentOccupation === 'ไม่ได้ประกอบอาชีพ') newForm.parentOccupation = '';
+                        if (newForm.parentWorkplace === '-') newForm.parentWorkplace = '';
+                        if (newForm.parentIncome === '-') newForm.parentIncome = '';
+                    }
+                }
+
+                // การจัดการติ๊กไม่ได้ประกอบอาชีพ - บิดา
+                if (name === 'fatherUnemployed') {
+                    if (value === true) {
+                        newForm.fatherOccupation = 'ไม่ได้ประกอบอาชีพ';
+                        newForm.fatherIncome = '-';
+                    } else {
+                        if (newForm.fatherOccupation === 'ไม่ได้ประกอบอาชีพ') newForm.fatherOccupation = '';
+                        if (newForm.fatherIncome === '-') newForm.fatherIncome = '';
+                    }
+                }
+
+                // การจัดการติ๊กไม่ได้ประกอบอาชีพ - มารดา
+                if (name === 'motherUnemployed') {
+                    if (value === true) {
+                        newForm.motherOccupation = 'ไม่ได้ประกอบอาชีพ';
+                        newForm.motherIncome = '-';
+                    } else {
+                        if (newForm.motherOccupation === 'ไม่ได้ประกอบอาชีพ') newForm.motherOccupation = '';
+                        if (newForm.motherIncome === '-') newForm.motherIncome = '';
+                    }
+                }
+
+                // การจัดการดึงข้อมูลอัตโนมัติเมื่อเลือก ปัจจุบันอาศัยอยู่กับ (livingWith)
+                if (name === 'livingWith') {
+                    if (value === 'บิดามารดา' || value === 'มารดา') {
+                        newForm.parentName = newForm.motherName || '';
+                        newForm.parentTel = newForm.motherTel || '';
+                        newForm.parentOccupation = newForm.motherOccupation || '';
+                        newForm.parentIncome = newForm.motherIncome || '';
+                        newForm.parentRelation = 'มารดา';
+                        newForm.parentUnemployed = newForm.motherUnemployed || newForm.motherOccupation === 'ไม่ได้ประกอบอาชีพ' || newForm.motherOccupation === '-';
+                    } else if (value === 'บิดา') {
+                        newForm.parentName = newForm.fatherName || '';
+                        newForm.parentTel = newForm.fatherTel || '';
+                        newForm.parentOccupation = newForm.fatherOccupation || '';
+                        newForm.parentIncome = newForm.fatherIncome || '';
+                        newForm.parentRelation = 'บิดา';
+                        newForm.parentUnemployed = newForm.fatherUnemployed || newForm.fatherOccupation === 'ไม่ได้ประกอบอาชีพ' || newForm.fatherOccupation === '-';
+                    } else if (value === 'ผู้ปกครองที่ไม่ใช่บิดามารดา') {
+                        newForm.parentName = '';
+                        newForm.parentTel = '';
+                        newForm.parentOccupation = '';
+                        newForm.parentIncome = '';
+                        newForm.parentRelation = '';
+                        newForm.parentUnemployed = false;
                     }
                 }
 
@@ -3305,7 +3435,7 @@
                 if (name === 'addrDist') { newForm.addrSub = ''; newForm.addrZip = ''; }
                 
                 if (name === 'addrSub' && newForm.addrProv && newForm.addrDist) {
-                    const match = provincesData.find(p => 
+                    const match = (provincesData || []).find(p => 
                         (p.prov || '').trim() === newForm.addrProv && 
                         (p.dist || '').trim() === newForm.addrDist && 
                         (p.sub || '').trim() === value
@@ -3354,8 +3484,16 @@
                 setIsSaving(true);
                 const newStudent = { ...formData, id: formData.id || Date.now().toString() };
                 
+                if (newStudent.parentRelation && newStudent.parentRelation !== ' ') {
+                    newStudent.parentNameCombined = `${newStudent.parentName.replace(/\s*\(.*?\)$/, '')} (${newStudent.parentRelation})`;
+                } else {
+                    newStudent.parentNameCombined = newStudent.parentName;
+                }
+                
                 try {
-                    await callGAS('saveStudent', newStudent);
+                    if (typeof callGAS === 'function') {
+                        await callGAS('saveStudent', newStudent);
+                    }
                     if (formData.id) {
                         setStudents(students.map(s => s.id === formData.id ? newStudent : s));
                     } else {
@@ -3369,15 +3507,100 @@
                 setIsSaving(false);
             };
 
+            const formatPhoneForEditSafe = (phone) => {
+                if (phone === undefined || phone === null) return '';
+                const raw = String(phone).trim();
+                if (raw === '-' || raw === '') return '';
+                
+                let val = raw.replace(/\D/g, ''); 
+                if (val.length === 9 && /^[689]/.test(val)) val = '0' + val; 
+                
+                if (val.length === 10) {
+                    return `${val.slice(0,3)}-${val.slice(3,6)}-${val.slice(6,10)}`;
+                }
+                return raw; 
+            };
+
+            const parseThaiDateToISO = (thaiDateStr) => {
+                if (!thaiDateStr) return '';
+                const str = String(thaiDateStr).trim();
+                if (str.match(/^\d{4}-\d{2}-\d{2}$/)) return str; 
+                const months = {
+                    'มกราคม': '01', 'กุมภาพันธ์': '02', 'มีนาคม': '03', 'เมษายน': '04',
+                    'พฤษภาคม': '05', 'มิถุนายน': '06', 'กรกฎาคม': '07', 'สิงหาคม': '08',
+                    'กันยายน': '09', 'ตุลาคม': '10', 'พฤศจิกายน': '11', 'ธันวาคม': '12'
+                };
+                const parts = str.split(/\s+/);
+                if (parts.length >= 3) {
+                    const d = parts[0].padStart(2, '0');
+                    const m = months[parts[1]];
+                    let y = parseInt(parts[2], 10);
+                    if (!isNaN(y)) {
+                        if (y > 2400) y -= 543;
+                        if (d && m) return `${y}-${m}-${d}`;
+                    }
+                }
+                return str; 
+            };
+
             const editStudent = (stu) => {
-                setFormData(stu);
+                const safeStr = (val) => (val !== undefined && val !== null) ? String(val) : '';
+
+                let rawParentTel = safeStr(stu.parentTel || stu.parentPhone || stu.phone || stu.parent_tel || stu['เบอร์ผู้ปกครอง'] || stu['เบอร์โทรผู้ปกครอง']);
+                
+                if (!rawParentTel) {
+                    for (let key in stu) {
+                        if (stu.hasOwnProperty(key)) {
+                            const kLower = String(key).toLowerCase();
+                            if ((kLower.includes('tel') || kLower.includes('phone') || kLower.includes('เบอร์')) && 
+                                !kLower.includes('student') && !kLower.includes('นักเรียน')) {
+                                if (stu[key] && String(stu[key]).replace(/\D/g, '').length >= 9) {
+                                    rawParentTel = safeStr(stu[key]);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                const rawStudentTel = safeStr(stu.studentTel || stu.studentPhone || stu['เบอร์โทรศัพท์นักเรียน']);
+
+                setFormData({
+                    ...initialFormState,
+                    ...stu, 
+                    dob: parseThaiDateToISO(stu.dob),
+                    parentTel: formatPhoneForEditSafe(rawParentTel),
+                    studentTel: formatPhoneForEditSafe(rawStudentTel),
+                    fatherTel: formatPhoneForEditSafe(safeStr(stu.fatherTel)),
+                    motherTel: formatPhoneForEditSafe(safeStr(stu.motherTel)),
+                    
+                    hasCongenitalDisease: (stu.congenitalDisease && stu.congenitalDisease !== 'ไม่มี' && stu.congenitalDisease !== '-') ? 'มี' : 'ไม่มี',
+                    hasDisability: (stu.disability && stu.disability !== 'ไม่มี' && stu.disability !== '-') ? 'มี' : 'ไม่มี',
+                    
+                    fatherName: safeStr(stu.fatherName),
+                    fatherOccupation: safeStr(stu.fatherOccupation),
+                    fatherIncome: safeStr(stu.fatherIncome),
+                    motherName: safeStr(stu.motherName),
+                    motherOccupation: safeStr(stu.motherOccupation),
+                    motherIncome: safeStr(stu.motherIncome),
+                    parentsStatus: safeStr(stu.parentsStatus),
+                    livingWith: safeStr(stu.livingWith),
+                    parentIncome: safeStr(stu.parentIncome),
+                    parentRelation: safeStr(stu.parentRelation),
+
+                    parentUnemployed: safeStr(stu.parentOccupation) === '-' || safeStr(stu.parentOccupation) === 'ไม่ได้ประกอบอาชีพ',
+                    fatherUnemployed: safeStr(stu.fatherOccupation) === '-' || safeStr(stu.fatherOccupation) === 'ไม่ได้ประกอบอาชีพ',
+                    motherUnemployed: safeStr(stu.motherOccupation) === '-' || safeStr(stu.motherOccupation) === 'ไม่ได้ประกอบอาชีพ'
+                });
                 window.scrollTo({ top: 0, behavior: 'smooth' });
             };
 
             const deleteStudent = async (id) => {
                 if(window.confirm('ยืนยันการลบนักเรียนออกจากฐานข้อมูล?')) {
                     try {
-                        await callGAS('deleteStudent', { id });
+                        if (typeof callGAS === 'function') {
+                            await callGAS('deleteStudent', { id });
+                        }
                         setStudents(students.filter(s => s.id !== id));
                         alert('ลบข้อมูลสำเร็จ');
                     } catch(error) {
@@ -3386,184 +3609,354 @@
                 }
             };
 
-            // --- ฟังก์ชันพิมพ์ข้อมูลนักเรียน ---
-            const handlePrintStudent = (stu) => {
-                const printContent = `
-                    <div style="font-family: 'Sarabun', sans-serif; padding: 0; max-width: 100%; margin: 0 auto; color: #000;">
-                        <div style="display: flex; align-items: center; justify-content: center; border-bottom: 3px solid #000; padding-bottom: 20px; margin-bottom: 30px; text-align: center; position: relative;">
-                            ${schoolConfig && schoolConfig.logo ? `<img src="${schoolConfig.logo}" style="width: 100px; height: 100px; object-fit: contain; position: absolute; left: 0; top: 0;" />` : ''}
-                            <div style="flex: 1;">
-                                <h2 style="font-size: 24pt; margin: 0 0 8px 0; font-weight: bold;">${schoolConfig ? schoolConfig.name : 'โรงเรียนนราสิกขาลัย'}</h2>
-                                <h3 style="font-size: 18pt; margin: 0; font-weight: normal;">ระเบียนประวัติและข้อมูลนักเรียน</h3>
+            // --- ฟังก์ชันสร้าง HTML สำหรับ Print Preview และการ Print จริง ---
+            const generatePrintHTML = (stu) => {
+                return `
+                    <div style="font-family: 'Sarabun', sans-serif; font-size: 16pt; color: #333; line-height: 1.5;">
+                        <div style="display: flex; align-items: center; justify-content: flex-start; border-bottom: 2px solid #000; padding-bottom: 15px; margin-bottom: 20px;">
+                            ${schoolConfig && schoolConfig.logo ? `<img src="${schoolConfig.logo}" style="width: 85px; height: 85px; object-fit: contain; margin-right: 25px; display: block;" />` : ''}
+                            <div style="display: flex; flex-direction: column; text-align: left;">
+                                <h2 style="font-size: 22pt; font-weight: bold; margin: 0 0 5px 0; color: #000;">${schoolConfig ? schoolConfig.name : 'โรงเรียนนราสิกขาลัย'}</h2>
+                                <h3 style="font-size: 18pt; font-weight: bold; margin: 0 0 5px 0; color: #000;">ระเบียนประวัติและข้อมูลนักเรียน</h3>
+                                <p style="font-size: 14pt; margin: 0; color: #333;">เอกสารอ้างอิงจากระบบสารสนเทศโรงเรียน</p>
                             </div>
                         </div>
                         
-                        <div style="display: flex; gap: 40px; margin-bottom: 30px;">
-                            <div style="width: 160px; height: 210px; border: 1px solid #000; display: flex; align-items: center; justify-content: center; background-color: #fff; box-shadow: 2px 2px 5px rgba(0,0,0,0.1);">
-                                ${stu.photoBase64 ? `<img src="${stu.photoBase64}" style="width: 100%; height: 100%; object-fit: cover;" />` : `<span style="color:#aaa; font-size:12pt;">รูปถ่ายนักเรียน</span>`}
+                        <div style="display: flex; gap: 20px; margin-bottom: 20px;">
+                            <div style="width: 140px; height: 180px; border: 1px solid #ddd; display: flex; align-items: center; justify-content: center; background-color: #f9f9f9; flex-shrink: 0;">
+                                ${stu.photoBase64 ? `<img src="${stu.photoBase64}" style="width: 100%; height: 100%; object-fit: cover;" />` : `<span style="color:#aaa; font-size: 14pt;">รูปถ่าย</span>`}
                             </div>
                             <div style="flex: 1;">
-                                <h2 style="margin: 0 0 20px; font-size: 22pt; font-weight: bold;">${stu.name || '-'}</h2>
-                                <table style="width: 100%; border-collapse: collapse; font-size: 14pt;">
-                                    <tr><td style="padding: 6px 0; width: 180px; font-weight: bold;">เลขประจำตัวนักเรียน</td><td>${stu.code || '-'}</td></tr>
-                                    <tr><td style="padding: 6px 0; font-weight: bold;">เลขบัตรประชาชน</td><td>${stu.nationalId || '-'}</td></tr>
-                                    <tr><td style="padding: 6px 0; font-weight: bold;">ระดับชั้นเรียน</td><td>${stu.classLevel || '-'} ห้อง ${stu.room || '-'}</td></tr>
-                                    <tr><td style="padding: 6px 0; font-weight: bold;">แผนการเรียน</td><td>${stu.program || '-'}</td></tr>
+                                <h2 style="margin: 0 0 10px; color: #003366; font-size: 18pt; font-weight: bold;">${stu.name || '-'}</h2>
+                                <table style="width: 100%; border-collapse: collapse;">
+                                    <tr><td style="padding: 5px 0; width: 180px; font-weight: bold;">เลขประจำตัวนักเรียน</td><td>${stu.code || '-'}</td></tr>
+                                    <tr><td style="padding: 5px 0; font-weight: bold;">เลขบัตรประชาชน</td><td>${stu.nationalId || '-'}</td></tr>
+                                    <tr><td style="padding: 5px 0; font-weight: bold;">ระดับชั้นเรียน</td><td>${stu.classLevel || '-'} ห้อง ${stu.room || '-'}</td></tr>
+                                    <tr><td style="padding: 5px 0; font-weight: bold;">แผนการเรียน</td><td>${stu.program || '-'}</td></tr>
+                                    <tr><td style="padding: 5px 0; font-weight: bold;">ครูที่ปรึกษา</td><td>${stu.advisor || '-'}</td></tr>
                                 </table>
                             </div>
                         </div>
 
-                        <h3 style="background-color: #f3f4f6; padding: 10px 15px; margin-bottom: 20px; font-size: 16pt; font-weight: bold; border-left: 6px solid #000; -webkit-print-color-adjust: exact; print-color-adjust: exact;">ข้อมูลส่วนตัว</h3>
-                        <table style="width: 100%; border-collapse: collapse; margin-bottom: 30px; font-size: 14pt;">
+                        <h3 style="background-color: #f0f4f8; padding: 8px; margin-bottom: 10px; color: #003366; border-left: 4px solid #003366; font-size: 16pt; font-weight: bold;">ส่วนที่ 1: ข้อมูลส่วนตัว</h3>
+                        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
                             <tr>
-                                <td style="padding: 6px 0; width: 180px; font-weight: bold;">วัน/เดือน/ปีเกิด</td><td style="width: 35%;">${stu.dob ? new Date(stu.dob).toLocaleDateString('th-TH', {year: 'numeric', month: 'long', day: 'numeric'}) : '-'}</td>
-                                <td style="padding: 6px 0; width: 140px; font-weight: bold;">อายุ</td><td>${stu.age ? stu.age + ' ปี' : '-'}</td>
+                                <td style="padding: 5px 0; width: 160px; font-weight: bold;">วัน/เดือน/ปีเกิด</td><td style="width: 35%;">${stu.dob ? new Date(stu.dob).toLocaleDateString('th-TH', {year: 'numeric', month: 'long', day: 'numeric'}) : '-'}</td>
+                                <td style="padding: 5px 0; width: 140px; font-weight: bold;">อายุ</td><td>${stu.age ? stu.age + ' ปี' : '-'}</td>
                             </tr>
                             <tr>
-                                <td style="padding: 6px 0; font-weight: bold;">ศาสนา</td><td>${stu.religion || '-'}</td>
-                                <td style="padding: 6px 0; font-weight: bold;">เบอร์โทรนักเรียน</td><td>${stu.studentTel || '-'}</td>
-                            </tr>
-                            <tr>
-                                <td style="padding: 6px 0; font-weight: bold;">ครูที่ปรึกษา</td><td colSpan="3">${stu.advisor || '-'}</td>
+                                <td style="padding: 5px 0; font-weight: bold;">ศาสนา</td><td>${stu.religion || '-'}</td>
+                                <td style="padding: 5px 0; font-weight: bold;">เบอร์โทรนักเรียน</td><td>${stu.studentTel || '-'}</td>
                             </tr>
                         </table>
 
-                        <h3 style="background-color: #f3f4f6; padding: 10px 15px; margin-bottom: 20px; font-size: 16pt; font-weight: bold; border-left: 6px solid #000; -webkit-print-color-adjust: exact; print-color-adjust: exact;">ข้อมูลที่ติดต่อได้</h3>
-                        <table style="width: 100%; border-collapse: collapse; margin-bottom: 40px; font-size: 14pt;">
-                            <tr><td style="padding: 6px 0; width: 180px; font-weight: bold; vertical-align: top;">ที่อยู่ปัจจุบัน</td><td style="line-height: 1.6;">${stu.address || '-'}</td></tr>
-                            <tr><td style="padding: 6px 0; font-weight: bold;">ชื่อผู้ปกครอง</td><td>${stu.parentName || '-'}</td></tr>
-                            <tr><td style="padding: 6px 0; font-weight: bold;">เบอร์โทรผู้ปกครอง</td><td>${stu.parentTel || '-'}</td></tr>
+                        <h3 style="background-color: #f0f4f8; padding: 8px; margin-bottom: 10px; color: #003366; border-left: 4px solid #003366; font-size: 16pt; font-weight: bold;">ส่วนที่ 2: ข้อมูลสุขภาพ</h3>
+                        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+                            <tr>
+                                <td style="padding: 5px 0; width: 160px; font-weight: bold;">น้ำหนัก</td><td style="width: 35%;">${stu.weight ? stu.weight + ' กก.' : '-'}</td>
+                                <td style="padding: 5px 0; width: 140px; font-weight: bold;">ส่วนสูง</td><td>${stu.height ? stu.height + ' ซม.' : '-'}</td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 5px 0; font-weight: bold;">ค่า BMI</td><td>${stu.bmi || '-'}</td>
+                                <td style="padding: 5px 0; font-weight: bold;">แปลผล</td><td>${stu.bmiTranslation || '-'}</td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 5px 0; font-weight: bold;">โรคประจำตัว</td><td colspan="3">${(stu.congenitalDisease && stu.congenitalDisease !== 'ไม่มี' && stu.congenitalDisease !== '-') ? stu.congenitalDisease : 'ไม่มี'}</td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 5px 0; font-weight: bold;">ยาที่ทานประจำ</td><td colspan="3">${stu.regularMedicine || '-'}</td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 5px 0; font-weight: bold;">ความพิการ</td><td colspan="3">${(stu.disability && stu.disability !== 'ไม่มี' && stu.disability !== '-') ? stu.disability : 'ไม่มี'}</td>
+                            </tr>
+                        </table>
+
+                        <h3 style="background-color: #f0f4f8; padding: 8px; margin-bottom: 10px; color: #003366; border-left: 4px solid #003366; font-size: 16pt; font-weight: bold;">ส่วนที่ 3: ข้อมูลครอบครัวและผู้ปกครอง</h3>
+                        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+                            <tr>
+                                <td style="padding: 5px 0; width: 160px; font-weight: bold;">ชื่อ-สกุลบิดา</td><td style="width: 35%;">${stu.fatherName || '-'}</td>
+                                <td style="padding: 5px 0; width: 140px; font-weight: bold;">เบอร์โทรบิดา</td><td>${stu.fatherTel || '-'}</td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 5px 0; font-weight: bold;">อาชีพบิดา</td><td>${stu.fatherOccupation || '-'}</td>
+                                <td style="padding: 5px 0; font-weight: bold;">รายได้บิดา/เดือน</td><td>${stu.fatherIncome ? stu.fatherIncome + ' บาท' : '-'}</td>
+                            </tr>
+                            <tr><td colspan="4" style="border-bottom: 1px dashed #ccc; padding-top: 5px;"></td></tr>
+                            <tr>
+                                <td style="padding: 5px 0; font-weight: bold; padding-top: 10px;">ชื่อ-สกุลมารดา</td><td style="padding-top: 10px;">${stu.motherName || '-'}</td>
+                                <td style="padding: 5px 0; font-weight: bold; padding-top: 10px;">เบอร์โทรมารดา</td><td style="padding-top: 10px;">${stu.motherTel || '-'}</td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 5px 0; font-weight: bold;">อาชีพมารดา</td><td>${stu.motherOccupation || '-'}</td>
+                                <td style="padding: 5px 0; font-weight: bold;">รายได้มารดา/เดือน</td><td>${stu.motherIncome ? stu.motherIncome + ' บาท' : '-'}</td>
+                            </tr>
+                            <tr><td colspan="4" style="border-bottom: 1px dashed #ccc; padding-top: 5px;"></td></tr>
+                            <tr>
+                                <td style="padding: 5px 0; font-weight: bold; padding-top: 10px;">สถานะบิดามารดา</td><td colspan="3" style="padding-top: 10px;">${stu.parentsStatus || '-'}</td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 5px 0; font-weight: bold;">ปัจจุบันอาศัยอยู่กับ</td><td colspan="3">${stu.livingWith || '-'}</td>
+                            </tr>
+                            <tr><td colspan="4" style="border-bottom: 1px dashed #ccc; padding-top: 5px;"></td></tr>
+                            <tr>
+                                <td style="padding: 5px 0; font-weight: bold; padding-top: 10px;">ชื่อผู้ปกครองหลัก</td><td style="padding-top: 10px;">${stu.parentName || '-'} (${stu.parentRelation || '-'})</td>
+                                <td style="padding: 5px 0; font-weight: bold; padding-top: 10px;">เบอร์โทรติดต่อ</td><td style="padding-top: 10px;">${stu.parentTel || '-'}</td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 5px 0; font-weight: bold;">อาชีพผู้ปกครอง</td><td>${stu.parentOccupation || '-'}</td>
+                                <td style="padding: 5px 0; font-weight: bold;">รายได้ผู้ปกครอง/เดือน</td><td>${stu.parentIncome ? stu.parentIncome + ' บาท' : '-'}</td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 5px 0; font-weight: bold;">สถานที่ทำงาน</td><td colspan="3">${stu.parentWorkplace || '-'}</td>
+                            </tr>
+                        </table>
+
+                        <h3 style="background-color: #f0f4f8; padding: 8px; margin-bottom: 10px; color: #003366; border-left: 4px solid #003366; font-size: 16pt; font-weight: bold;">ส่วนที่ 4: ที่อยู่ปัจจุบัน</h3>
+                        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+                            <tr><td style="padding: 5px 0; width: 160px; font-weight: bold; vertical-align: top;">ที่อยู่</td><td style="line-height: 1.5;">${stu.address || '-'}</td></tr>
                         </table>
                         
-                        <div style="margin-top: 50px; text-align: right; font-size: 12pt; color: #555;">
+                        <div style="margin-top: 30px; text-align: right; font-size: 14pt; color: #555;">
                             พิมพ์โดย: ${user ? user.name : 'ผู้ดูแลระบบ'} <br/>
                             วันที่พิมพ์: ${new Date().toLocaleDateString('th-TH', {year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit'})} น.
                         </div>
                     </div>
                 `;
-                
+            };
+
+            const handlePrintPreview = (stu) => {
+                setPrintData(stu);
+            };
+
+            const executePrint = (stu) => {
+                const dataToPrint = stu || printData;
+                if (!dataToPrint) return;
+                const htmlContent = generatePrintHTML(dataToPrint);
                 const printWindow = window.open('', '_blank');
-                if (printWindow) {
-                    printWindow.document.write(`
-                        <!DOCTYPE html>
-                        <html lang="th">
-                        <head>
-                            <meta charset="UTF-8">
-                            <title>ประวัตินักเรียน - ${stu.name || 'ไม่มีชื่อ'}</title>
-                            <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-                            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-                            <style id="base-print-style">
-                                @page { size: A4 portrait; margin: 15mm; }
-                                * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; box-sizing: border-box; }
-                                body { font-family: 'Sarabun', sans-serif !important; background-color: #525659; margin: 0; padding-top: 130px; }
-                                
-                                /* แถบเครื่องมือด้านบน */
-                                .preview-toolbar { position: fixed; top: 0; left: 0; right: 0; background: #1e293b; color: white; padding: 15px 30px; display: flex; flex-direction: column; gap: 10px; z-index: 9999; box-shadow: 0 4px 10px rgba(0,0,0,0.5); border-bottom: 3px solid #3b82f6; box-sizing: border-box; }
-                                .toolbar-top { display: flex; justify-content: space-between; align-items: center; }
-                                .toolbar-bottom { display: flex; justify-content: flex-start; align-items: center; gap: 20px; background: #334155; padding: 10px 15px; border-radius: 8px; }
-                                
-                                .setting-group { display: flex; align-items: center; gap: 8px; font-size: 14pt; }
-                                .setting-group select { padding: 4px 8px; border-radius: 4px; border: 1px solid #cbd5e1; font-family: 'Sarabun', sans-serif; font-size: 14pt; color: #1e293b; outline: none; cursor: pointer; }
-                                
-                                .btn-container { display: flex; gap: 15px; }
-                                .print-btn { background: #3b82f6; color: white; border: 1px solid #2563eb; padding: 8px 30px; font-size: 16pt; font-family: 'Sarabun', sans-serif; cursor: pointer; border-radius: 8px; font-weight: bold; transition: 0.2s; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
-                                .print-btn:hover { background: #2563eb; transform: translateY(-1px); }
-                                .close-btn { background: #ef4444; color: white; border: 1px solid #dc2626; padding: 8px 30px; font-size: 16pt; font-family: 'Sarabun', sans-serif; cursor: pointer; border-radius: 8px; font-weight: bold; transition: 0.2s; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
-                                .close-btn:hover { background: #dc2626; transform: translateY(-1px); }
-                                
-                                /* ปรับคอนเทนเนอร์กระดาษ A4 แนวตั้ง */
-                                .a4-container { background: white; width: 100%; max-width: 210mm; min-height: 297mm; margin: 0 auto 20px; padding: 15mm; box-shadow: 0 0 20px rgba(0,0,0,0.5); color: #000; overflow: hidden; transition: all 0.3s ease; box-sizing: border-box; }
-                                
-                                @media print {
-                                    .preview-toolbar { display: none !important; }
-                                    .no-print { display: none !important; }
-                                    body { padding-top: 0; background-color: white; margin: 0; }
-                                    .a4-container { margin: 0; padding: 0; box-shadow: none; max-width: 100%; min-height: auto; overflow: visible; }
-                                }
-                            </style>
-                            <script src="https://cdn.tailwindcss.com"><\/script>
-                            <script>
-                                function updatePrintStyles() {
-                                    const size = document.getElementById('paperSize').value;
-                                    const orientation = document.getElementById('orientation').value;
-                                    const margin = document.getElementById('margin').value;
-
-                                    const styleId = 'dynamic-print-style';
-                                    let styleEl = document.getElementById(styleId);
-                                    if (!styleEl) {
-                                        styleEl = document.createElement('style');
-                                        styleEl.id = styleId;
-                                        document.head.appendChild(styleEl);
-                                    }
-                                    styleEl.innerHTML = '@page { size: ' + size + ' ' + orientation + '; margin: ' + margin + '; }';
-
-                                    const container = document.querySelector('.a4-container');
-                                    container.style.padding = margin;
-                                    
-                                    let width = '210mm';
-                                    let minHeight = '297mm';
-                                    if(size === 'A4') { width = orientation === 'portrait' ? '210mm' : '297mm'; minHeight = orientation === 'portrait' ? '297mm' : '210mm'; }
-                                    else if(size === 'A3') { width = orientation === 'portrait' ? '297mm' : '420mm'; minHeight = orientation === 'portrait' ? '420mm' : '297mm'; }
-                                    else if(size === 'Letter') { width = orientation === 'portrait' ? '215.9mm' : '279.4mm'; minHeight = orientation === 'portrait' ? '279.4mm' : '215.9mm'; }
-                                    else if(size === 'Legal') { width = orientation === 'portrait' ? '215.9mm' : '355.6mm'; minHeight = orientation === 'portrait' ? '355.6mm' : '215.9mm'; }
-                                    
-                                    container.style.maxWidth = width;
-                                    container.style.minHeight = minHeight;
-                                }
-                                window.onload = function() {
-                                    document.getElementById('orientation').value = 'portrait';
-                                    updatePrintStyles();
-                                };
-                            <\/script>
-                        </head>
-                        <body>
-                            <div class="preview-toolbar no-print">
-                                <div class="toolbar-top">
-                                    <div style="font-size: 18pt; font-weight: bold; color: #f8fafc !important;">
-                                        ระเบียนประวัตินักเรียน (Print Preview)
-                                    </div>
-                                    <div class="btn-container">
-                                        <button class="print-btn" onclick="window.print()"><i class="fa-solid fa-print"></i> พิมพ์ / Save PDF</button>
-                                        <button class="close-btn" onclick="window.close()"><i class="fa-solid fa-times"></i> ปิด</button>
-                                    </div>
-                                </div>
-                                <div class="toolbar-bottom">
-                                    <div class="setting-group">
-                                        <label>📄 ขนาดกระดาษ:</label>
-                                        <select id="paperSize" onchange="updatePrintStyles()">
-                                            <option value="A4">A4 (มาตรฐาน)</option>
-                                            <option value="A3">A3 (แผ่นใหญ่)</option>
-                                            <option value="Letter">Letter</option>
-                                            <option value="Legal">Legal</option>
-                                        </select>
-                                    </div>
-                                    <div class="setting-group">
-                                        <label>🔄 แนวกระดาษ:</label>
-                                        <select id="orientation" onchange="updatePrintStyles()">
-                                            <option value="portrait">แนวตั้ง</option>
-                                            <option value="landscape">แนวนอน</option>
-                                        </select>
-                                    </div>
-                                    <div class="setting-group">
-                                        <label>📏 ขอบกระดาษ:</label>
-                                        <select id="margin" onchange="updatePrintStyles()">
-                                            <option value="15mm">ปกติ (15mm)</option>
-                                            <option value="10mm">แคบ (10mm)</option>
-                                            <option value="20mm">กว้าง (20mm)</option>
-                                        </select>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="a4-container">
-                                ${printContent}
-                            </div>
-                        </body>
-                        </html>
-                    `);
-                    printWindow.document.close();
-                } else {
-                    alert('ไม่สามารถเปิดหน้าต่างใหม่ได้ กรุณาอนุญาต Pop-up (Allow Pop-ups) ในเบราว์เซอร์ของคุณ');
+                
+                if (!printWindow) {
+                    alert("เบราว์เซอร์ของคุณบล็อกหน้าต่าง Pop-up กรุณาอนุญาต Pop-up สำหรับเว็บไซต์นี้ก่อนทำการพิมพ์ครับ");
+                    return;
                 }
+
+                printWindow.document.write(`
+                    <!DOCTYPE html>
+                    <html lang="th">
+                    <head>
+                        <meta charset="UTF-8">
+                        <title>ประวัตินักเรียน (Print Preview) - ${dataToPrint.name || 'ไม่มีชื่อ'}</title>
+                        <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap" rel="stylesheet">
+                        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+                        <style>
+                            :root {
+                                --bg-color: #cbd5e1;
+                                --toolbar-bg: #0f172a;
+                                --toolbar-text: #f8fafc;
+                            }
+                            body {
+                                font-family: 'Sarabun', sans-serif;
+                                background-color: var(--bg-color);
+                                margin: 0;
+                                padding-top: 120px;
+                                display: flex;
+                                justify-content: center;
+                            }
+                            
+                            /* แถบเครื่องมือ (Toolbar) */
+                            .preview-toolbar {
+                                position: fixed; top: 0; left: 0; right: 0;
+                                background-color: var(--toolbar-bg);
+                                color: var(--toolbar-text);
+                                padding: 15px 30px;
+                                display: flex; flex-direction: column; gap: 15px;
+                                z-index: 1000;
+                                box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+                                border-bottom: 4px solid #3b82f6;
+                            }
+                            .toolbar-header {
+                                display: flex; justify-content: space-between; align-items: center;
+                            }
+                            .toolbar-title { font-size: 22px; font-weight: 700; display: flex; align-items: center; gap: 10px; }
+                            .toolbar-controls {
+                                display: flex; gap: 20px; align-items: center; flex-wrap: wrap;
+                                background-color: #1e293b; padding: 10px 20px; border-radius: 8px;
+                            }
+                            .control-group {
+                                display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 600;
+                            }
+                            .control-group select {
+                                padding: 6px 12px; border-radius: 6px; border: 1px solid #64748b;
+                                font-family: 'Sarabun', sans-serif; font-size: 15px; color: #0f172a;
+                                cursor: pointer; outline: none; background: white;
+                            }
+                            .btn {
+                                padding: 10px 24px; font-family: 'Sarabun', sans-serif; font-size: 16px;
+                                font-weight: 700; color: white; border: none; border-radius: 8px;
+                                cursor: pointer; transition: 0.2s; display: flex; align-items: center; gap: 8px;
+                            }
+                            .btn-print { background-color: #3b82f6; }
+                            .btn-print:hover { background-color: #2563eb; transform: translateY(-2px); }
+                            .btn-close { background-color: #ef4444; }
+                            .btn-close:hover { background-color: #dc2626; transform: translateY(-2px); }
+                            
+                            /* กระดาษ (Paper) */
+                            .page-wrapper {
+                                width: 100%;
+                                display: flex;
+                                justify-content: center;
+                                padding-bottom: 40px;
+                            }
+                            .a4-container {
+                                background: white;
+                                width: 210mm;
+                                min-height: 297mm;
+                                padding: 15mm;
+                                box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+                                box-sizing: border-box;
+                                transform-origin: top center;
+                            }
+
+                            /* โหมดพิมพ์ (Print Media) */
+                            @media print {
+                                body { padding: 0; background-color: white; }
+                                .preview-toolbar { display: none !important; }
+                                .page-wrapper { padding-bottom: 0; display: block; }
+                                .a4-container {
+                                    box-shadow: none !important;
+                                    margin: 0 !important;
+                                    padding: 0 !important; /* ตอนปริ้นจริงให้ @page จัดการเว้นขอบแทน */
+                                    width: 100% !important;
+                                    min-height: auto !important;
+                                    transform: none !important; 
+                                }
+                                * {
+                                    -webkit-print-color-adjust: exact !important;
+                                    print-color-adjust: exact !important;
+                                }
+                            }
+                        </style>
+                    </head>
+                    <body>
+                        <!-- แถบเครื่องมือ -->
+                        <div class="preview-toolbar no-print">
+                            <div class="toolbar-header">
+                                <div class="toolbar-title">
+                                    <i class="fa-solid fa-file-invoice text-blue-400"></i> ตัวอย่างก่อนพิมพ์: ประวัตินักเรียน
+                                </div>
+                                <div style="display: flex; gap: 15px;">
+                                    <button class="btn btn-print" onclick="window.print()">
+                                        <i class="fa-solid fa-print"></i> พิมพ์ / บันทึก PDF
+                                    </button>
+                                    <button class="btn btn-close" onclick="window.close()">
+                                        <i class="fa-solid fa-xmark"></i> ปิดหน้าต่าง
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="toolbar-controls">
+                                <div class="control-group">
+                                    <label><i class="fa-solid fa-file-lines"></i> ขนาดกระดาษ:</label>
+                                    <select id="paperSize" onchange="updatePrintStyles()">
+                                        <option value="A4">A4 (มาตรฐาน)</option>
+                                        <option value="A3">A3</option>
+                                        <option value="Letter">Letter</option>
+                                        <option value="Legal">Legal</option>
+                                    </select>
+                                </div>
+                                <div class="control-group">
+                                    <label><i class="fa-solid fa-rotate-right"></i> แนวกระดาษ:</label>
+                                    <select id="orientation" onchange="updatePrintStyles()">
+                                        <option value="portrait">แนวตั้ง (Portrait)</option>
+                                        <option value="landscape">แนวนอน (Landscape)</option>
+                                    </select>
+                                </div>
+                                <div class="control-group">
+                                    <label><i class="fa-solid fa-border-all"></i> ขอบกระดาษ:</label>
+                                    <select id="margin" onchange="updatePrintStyles()">
+                                        <option value="15mm">ปกติ (15mm)</option>
+                                        <option value="10mm">แคบ (10mm)</option>
+                                        <option value="5mm">แคบมาก (5mm)</option>
+                                        <option value="20mm">กว้าง (20mm)</option>
+                                    </select>
+                                </div>
+                                <div class="control-group">
+                                    <label style="color: #fde047;"><i class="fa-solid fa-magnifying-glass-minus"></i> ย่อเนื้อหา (Fit):</label>
+                                    <select id="fitToPage" onchange="updatePrintStyles()" style="background-color: #fef08a; border-color: #facc15; font-weight: bold; color: #854d0e;">
+                                        <option value="1">100% (พอดี 1 หน้า)</option>
+                                        <option value="0.95">ย่อ 95%</option>
+                                        <option value="0.9">ย่อ 90%</option>
+                                        <option value="0.85">ย่อ 85%</option>
+                                        <option value="0.8">ย่อ 80%</option>
+                                        <option value="0.75">ย่อ 75%</option>
+                                        <option value="0.7">ย่อ 70%</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- กระดาษ A4 -->
+                        <div class="page-wrapper">
+                            <div class="a4-container" id="printableArea">
+                                ${htmlContent}
+                            </div>
+                        </div>
+
+                        <!-- สคริปต์ควบคุมการเปลี่ยนสไตล์ -->
+                        <script>
+                            function updatePrintStyles() {
+                                const size = document.getElementById('paperSize').value;
+                                const orientation = document.getElementById('orientation').value;
+                                const margin = document.getElementById('margin').value;
+                                const fitScale = parseFloat(document.getElementById('fitToPage').value);
+
+                                // 1. กำหนด @page และ Scale สำหรับการปริ้นจริง (Physical Print)
+                                let styleEl = document.getElementById('dynamic-print-style');
+                                if (!styleEl) {
+                                    styleEl = document.createElement('style');
+                                    styleEl.id = 'dynamic-print-style';
+                                    document.head.appendChild(styleEl);
+                                }
+                                styleEl.innerHTML = '@media print { @page { size: ' + size + ' ' + orientation + '; margin: ' + margin + '; } body { zoom: ' + fitScale + '; } }';
+
+                                // 2. อัปเดตขนาดกระดาษจำลองบนหน้าจอ (Screen Preview)
+                                const container = document.getElementById('printableArea');
+                                let width = '210mm';
+                                let height = '297mm';
+                                
+                                if(size === 'A4') { width = orientation === 'portrait' ? '210mm' : '297mm'; height = orientation === 'portrait' ? '297mm' : '210mm'; }
+                                else if(size === 'A3') { width = orientation === 'portrait' ? '297mm' : '420mm'; height = orientation === 'portrait' ? '420mm' : '297mm'; }
+                                else if(size === 'Letter') { width = orientation === 'portrait' ? '215.9mm' : '279.4mm'; height = orientation === 'portrait' ? '279.4mm' : '215.9mm'; }
+                                else if(size === 'Legal') { width = orientation === 'portrait' ? '215.9mm' : '355.6mm'; height = orientation === 'portrait' ? '355.6mm' : '215.9mm'; }
+
+                                container.style.width = width;
+                                container.style.minHeight = height;
+                                container.style.padding = margin;
+
+                                // 3. การจัดการย่อขนาดเนื้อหา (Fit-To-Page) สำหรับหน้าจอ
+                                container.style.zoom = '1';
+                                container.style.transform = 'none';
+
+                                const isFirefox = navigator.userAgent.toLowerCase().includes('firefox');
+                                
+                                if (fitScale !== 1) {
+                                    if (isFirefox) {
+                                        container.style.transform = 'scale(' + fitScale + ')';
+                                        container.style.transformOrigin = 'top center';
+                                    } else {
+                                        container.style.zoom = fitScale;
+                                    }
+                                }
+                            }
+
+                            // กำหนดค่าเริ่มต้นเมื่อโหลดเสร็จ
+                            window.onload = function() {
+                                updatePrintStyles();
+                            };
+                        <\/script>
+                    </body>
+                    </html>
+                `);
+                printWindow.document.close();
+                setPrintData(null); // ปิดหน้าต่างพรีวิว
             };
 
             const handlePromoteStudents = async () => {
@@ -3598,12 +3991,20 @@
                         if (newLevel) {
                             const updatedStu = { ...stu, classLevel: newLevel };
                             
-                            return callGAS('saveStudent', updatedStu).then(() => {
+                            if (typeof callGAS === 'function') {
+                                return callGAS('saveStudent', updatedStu).then(() => {
+                                    const idx = updatedStudentsList.findIndex(s => s.id === updatedStu.id);
+                                    if(idx !== -1) updatedStudentsList[idx] = updatedStu;
+                                    successCount++;
+                                    setPromoteProgress(`${successCount} / ${total}`);
+                                }).catch(e => console.error("Promote Error:", e));
+                            } else {
                                 const idx = updatedStudentsList.findIndex(s => s.id === updatedStu.id);
                                 if(idx !== -1) updatedStudentsList[idx] = updatedStu;
                                 successCount++;
                                 setPromoteProgress(`${successCount} / ${total}`);
-                            }).catch(e => console.error("Promote Error:", e));
+                                return Promise.resolve();
+                            }
                         }
                         return Promise.resolve();
                     });
@@ -3627,9 +4028,96 @@
                 return matchSearch && matchClass && matchRoom;
             });
 
-            const uniqueProvinces = [...new Set(provincesData.map(p => (p.prov || '').trim()))].filter(Boolean).sort();
-            const uniqueDistricts = [...new Set(provincesData.filter(p => (p.prov || '').trim() === formData.addrProv).map(p => (p.dist || '').trim()))].filter(Boolean).sort();
-            const uniqueSubs = [...new Set(provincesData.filter(p => (p.prov || '').trim() === formData.addrProv && (p.dist || '').trim() === formData.addrDist).map(p => (p.sub || '').trim()))].filter(Boolean).sort();
+            // --- ฟังก์ชันดาวน์โหลด Excel ---
+            const exportToExcel = () => {
+                if (filteredStudents.length === 0) {
+                    return alert('ไม่มีข้อมูลนักเรียนสำหรับดาวน์โหลด');
+                }
+
+                // สร้าง Headers (ตัดที่อยู่ย่อยออก เหลือแค่ที่อยู่รวม)
+                const headers = [
+                    "ลำดับ", "เลขประจำตัวนักเรียน", "ชื่อ-สกุล", "ศาสนา", "ชั้นเรียน", "ห้อง", "เลขบัตรประจำตัวประชาชน", 
+                    "วัน/เดือน/ปีเกิด", "อายุ", "เบอร์โทรศัพท์นักเรียน", "แผนการเรียน", "ครูที่ปรึกษา", 
+                    "น้ำหนัก", "ส่วนสูง", "ค่า BMI", "แปลผล BMI", "โรคประจำตัว", "ยาที่ทานประจำ", "ความพิการ",
+                    "ชื่อ-สกุลบิดา", "เบอร์โทรบิดา", "อาชีพบิดา", "รายได้บิดา",
+                    "ชื่อ-สกุลมารดา", "เบอร์โทรมารดา", "อาชีพมารดา", "รายได้มารดา",
+                    "สถานะบิดามารดา", "ปัจจุบันอาศัยอยู่กับ",
+                    "ชื่อผู้ปกครองหลัก", "ความเกี่ยวข้อง", "เบอร์โทรผู้ปกครอง", "อาชีพผู้ปกครอง", "สถานที่ทำงานผู้ปกครอง", "รายได้ผู้ปกครอง",
+                    "ที่อยู่รวม"
+                ];
+
+                // สร้าง Data Rows
+                let csvContent = "\uFEFF" + headers.join(',') + '\n'; // Add BOM for Excel UTF-8 support
+
+                filteredStudents.forEach((stu, index) => {
+                    // การจัดการโรคและความพิการให้แสดงค่าจริงจากฐานข้อมูล
+                    const disease = (stu.congenitalDisease && stu.congenitalDisease !== 'ไม่มี' && stu.congenitalDisease !== '-') ? stu.congenitalDisease : 'ไม่มี';
+                    const disab = (stu.disability && stu.disability !== 'ไม่มี' && stu.disability !== '-') ? stu.disability : 'ไม่มี';
+
+                    const row = [
+                        index + 1,
+                        stu.code,
+                        stu.name,
+                        stu.religion,
+                        stu.classLevel,
+                        stu.room,
+                        stu.nationalId,
+                        stu.dob,
+                        stu.age,
+                        stu.studentTel,
+                        stu.program,
+                        stu.advisor,
+                        stu.weight,
+                        stu.height,
+                        stu.bmi,
+                        stu.bmiTranslation,
+                        disease,
+                        stu.regularMedicine,
+                        disab,
+                        stu.fatherName,
+                        stu.fatherTel,
+                        stu.fatherOccupation,
+                        stu.fatherIncome,
+                        stu.motherName,
+                        stu.motherTel,
+                        stu.motherOccupation,
+                        stu.motherIncome,
+                        stu.parentsStatus,
+                        stu.livingWith,
+                        stu.parentName,
+                        stu.parentRelation,
+                        stu.parentTel,
+                        stu.parentOccupation,
+                        stu.parentWorkplace,
+                        stu.parentIncome,
+                        stu.address
+                    ];
+                    
+                    // แปลงค่าให้ปลอดภัย ป้องกันลูกน้ำ (,) ในข้อมูลทำลายโครงสร้าง CSV
+                    const safeRow = row.map(val => `"${String(val || '').replace(/"/g, '""')}"`);
+                    csvContent += safeRow.join(',') + '\n';
+                });
+
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement("a");
+                const url = URL.createObjectURL(blob);
+                link.setAttribute("href", url);
+                const fileName = `ข้อมูลนักเรียน_${filterClass || 'ทุกชั้น'}_${filterRoom ? `ห้อง${filterRoom}` : 'ทุกห้อง'}.csv`;
+                link.setAttribute("download", fileName);
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            };
+
+            // ป้องกัน Array ว่างเพื่อให้ `.map()` และ `.filter()` ไม่ Error
+            const safeStudents = students || [];
+            const uniqueClasses = [...new Set(safeStudents.map(s => s.classLevel).filter(Boolean))].sort();
+            const uniqueRooms = [...new Set(safeStudents.filter(s => !filterClass || s.classLevel === filterClass).map(s => s.room).filter(Boolean))].sort((a,b) => Number(a) - Number(b));
+
+            const safeProvincesData = provincesData || [];
+            const uniqueProvinces = [...new Set(safeProvincesData.map(p => (p.prov || '').trim()))].filter(Boolean).sort();
+            const uniqueDistricts = [...new Set(safeProvincesData.filter(p => (p.prov || '').trim() === formData.addrProv).map(p => (p.dist || '').trim()))].filter(Boolean).sort();
+            const uniqueSubs = [...new Set(safeProvincesData.filter(p => (p.prov || '').trim() === formData.addrProv && (p.dist || '').trim() === formData.addrDist).map(p => (p.sub || '').trim()))].filter(Boolean).sort();
 
             return (
                 <div>
@@ -3651,10 +4139,9 @@
                                 onChange={e=>setSearchTerm(e.target.value)} 
                                 onKeyDown={(e) => {
                                     if(e.key === 'Enter' && searchTerm.trim()) {
-                                        const found = students.find(s => String(s.code) === searchTerm.trim() || String(s.nationalId) === searchTerm.trim() || String(s.name).includes(searchTerm.trim()));
+                                        const found = safeStudents.find(s => String(s.code) === searchTerm.trim() || String(s.nationalId) === searchTerm.trim() || String(s.name).includes(searchTerm.trim()));
                                         if(found) { 
-                                            setFormData(found); 
-                                            window.scrollTo({ top: 0, behavior: 'smooth' }); 
+                                            editStudent(found); 
                                         } else { 
                                             alert('ไม่พบข้อมูลนักเรียน'); 
                                         }
@@ -3663,10 +4150,9 @@
                             />
                             <button onClick={() => {
                                 if(!searchTerm.trim()) return;
-                                const found = students.find(s => String(s.code) === searchTerm.trim() || String(s.nationalId) === searchTerm.trim() || String(s.name).includes(searchTerm.trim()));
+                                const found = safeStudents.find(s => String(s.code) === searchTerm.trim() || String(s.nationalId) === searchTerm.trim() || String(s.name).includes(searchTerm.trim()));
                                 if(found) {
-                                    setFormData(found);
-                                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                                    editStudent(found);
                                 } else {
                                     alert('ไม่พบข้อมูลนักเรียน');
                                 }
@@ -3681,190 +4167,435 @@
                             </div>
                         )}
                         <form onSubmit={saveStudent}>
-                            <div className="flex flex-col md:flex-row gap-6">
-                                <div className="w-full md:w-48 flex flex-col items-center">
-                                    <div className="w-32 h-40 border-2 border-dashed border-gray-300 bg-gray-50 flex items-center justify-center overflow-hidden mb-2 relative">
-                                        {formData.photoBase64 ? (
-                                            <img src={formData.photoBase64} className="w-full h-full object-cover" alt="Student" />
-                                        ) : (
-                                            <i className="fas fa-user text-4xl text-gray-300"></i>
-                                        )}
-                                    </div>
-                                    <label className="bg-gray-200 hover:bg-gray-300 text-xs px-3 py-1 rounded cursor-pointer">
-                                        <i className="fas fa-upload"></i> อัปโหลดรูป
-                                        <input type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} />
-                                    </label>
+                            
+                            {/* ส่วนที่ 1: ข้อมูลทั่วไป */}
+                            <div className="mb-6 border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+                                <div className="bg-blue-50 p-3 border-b border-blue-100 flex items-center gap-3">
+                                    <div className="w-8 h-8 bg-white rounded-full flex items-center justify-center text-ns-blue shadow-sm font-bold">1</div>
+                                    <h3 className="font-bold text-gray-800 text-lg">ข้อมูลทั่วไป</h3>
                                 </div>
-                                
-                                <div className="flex-1 flex flex-col gap-4">
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                        <div className="md:col-span-1"><label className="text-xs text-gray-500 font-bold">เลขประจำตัวนักเรียน</label><input type="text" name="code" value={formData.code} onChange={handleChange} className="w-full p-2 border rounded text-sm font-bold text-ns-blue bg-blue-50 focus:bg-white" required /></div>
-                                        <div className="md:col-span-2"><label className="text-xs text-gray-500 font-bold">ชื่อ-นามสกุล</label><input type="text" name="name" value={formData.name} onChange={handleChange} className="w-full p-2 border rounded text-sm" required /></div>
+                                <div className="p-5 bg-white flex flex-col md:flex-row gap-6">
+                                    <div className="w-full md:w-48 flex flex-col items-center">
+                                        <div className="w-32 h-40 border-2 border-dashed border-gray-300 bg-gray-50 flex items-center justify-center overflow-hidden mb-2 relative rounded-lg">
+                                            {formData.photoBase64 ? (
+                                                <img src={formData.photoBase64} className="w-full h-full object-cover" alt="Student" />
+                                            ) : (
+                                                <i className="fas fa-user text-4xl text-gray-300"></i>
+                                            )}
+                                        </div>
+                                        <label className="bg-gray-200 hover:bg-gray-300 text-xs px-3 py-1.5 rounded cursor-pointer font-bold text-gray-700 shadow-sm transition">
+                                            <i className="fas fa-upload mr-1"></i> อัปโหลดรูป
+                                            <input type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} />
+                                        </label>
                                     </div>
                                     
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                        <div>
-                                            <label className="text-xs text-gray-500 font-bold">ชั้นเรียน</label>
-                                            <select name="classLevel" value={formData.classLevel} onChange={handleChange} className="w-full p-2 border rounded text-sm" required>
+                                    <div className="flex-1 grid grid-cols-1 md:grid-cols-4 gap-4 items-start">
+                                        <div className="md:col-span-1">
+                                            <label className="text-xs text-gray-500 font-bold mb-1 block">เลขประจำตัวนักเรียน <span className="text-red-500">*</span></label>
+                                            <input type="text" name="code" value={formData.code} onChange={handleChange} className="w-full p-2 border border-blue-200 rounded text-sm font-bold text-ns-blue bg-blue-50 focus:bg-white focus:ring-2 focus:ring-ns-blue outline-none" required />
+                                        </div>
+                                        <div className="md:col-span-2">
+                                            <label className="text-xs text-gray-500 font-bold mb-1 block">ชื่อ-นามสกุล <span className="text-red-500">*</span></label>
+                                            <input type="text" name="name" value={formData.name} onChange={handleChange} className="w-full p-2 border rounded text-sm focus:ring-2 focus:ring-ns-blue outline-none" required />
+                                        </div>
+                                        <div className="md:col-span-1">
+                                            <label className="text-xs text-gray-500 font-bold mb-1 block">ศาสนา</label>
+                                            <select name="religion" value={['อิสลาม','พุทธ','คริสต์',''].includes(formData.religion) ? formData.religion : 'อื่นๆ'} onChange={(e) => {
+                                                if(e.target.value !== 'อื่นๆ') setFormData({...formData, religion: e.target.value});
+                                                else setFormData({...formData, religion: ' '}); 
+                                            }} className="w-full p-2 border rounded text-sm focus:ring-2 focus:ring-ns-blue outline-none">
+                                                <option value="">เลือกศาสนา</option>
+                                                <option value="อิสลาม">อิสลาม</option>
+                                                <option value="พุทธ">พุทธ</option>
+                                                <option value="คริสต์">คริสต์</option>
+                                                <option value="อื่นๆ">อื่น ๆ</option>
+                                            </select>
+                                            {!['อิสลาม','พุทธ','คริสต์',''].includes(formData.religion) && formData.religion !== undefined && formData.religion !== '' && (
+                                                <input type="text" name="religion" value={formData.religion.trim()} onChange={handleChange} className="w-full p-2 border rounded text-sm mt-1 focus:ring-2 focus:ring-ns-blue outline-none" placeholder="ระบุศาสนา" />
+                                            )}
+                                        </div>
+
+                                        <div className="md:col-span-1">
+                                            <label className="text-xs text-gray-500 font-bold mb-1 block">ชั้นเรียน <span className="text-red-500">*</span></label>
+                                            <select name="classLevel" value={formData.classLevel} onChange={handleChange} className="w-full p-2 border rounded text-sm focus:ring-2 focus:ring-ns-blue outline-none" required>
                                                 <option value="">เลือกชั้น</option>
                                                 <option value="ม.1">ม.1</option><option value="ม.2">ม.2</option><option value="ม.3">ม.3</option>
                                                 <option value="ม.4">ม.4</option><option value="ม.5">ม.5</option><option value="ม.6">ม.6</option>
                                             </select>
                                         </div>
-                                        <div>
-                                            <label className="text-xs text-gray-500 font-bold">ห้อง</label>
-                                            <select name="room" value={formData.room} onChange={handleChange} className="w-full p-2 border rounded text-sm" required>
+                                        <div className="md:col-span-1">
+                                            <label className="text-xs text-gray-500 font-bold mb-1 block">ห้อง <span className="text-red-500">*</span></label>
+                                            <select name="room" value={formData.room} onChange={handleChange} className="w-full p-2 border rounded text-sm focus:ring-2 focus:ring-ns-blue outline-none" required>
                                                 <option value="">เลือกห้อง</option>
                                                 <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option>
                                                 <option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option><option value="10">10</option>
                                             </select>
                                         </div>
-                                        <div><label className="text-xs text-gray-500 font-bold">แผนการเรียน</label><input type="text" name="program" value={formData.program} onChange={handleChange} className="w-full p-2 border rounded text-sm bg-gray-50" placeholder="อัตโนมัติตามชั้น/ห้อง" /></div>
-                                    </div>
-
-                                    {/* --- เพิ่มแถวใหม่สำหรับ เลขบัตรประชาชน และ ศาสนา --- */}
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-purple-50 p-3 rounded-lg border border-purple-100">
                                         <div className="md:col-span-2">
-                                            <label className="text-xs font-bold text-purple-700">เลขบัตรประจำตัวประชาชน (13 หลัก)</label>
-                                            <input type="text" name="nationalId" value={formData.nationalId} onChange={handleNationalIdChange} className="w-full p-2 border border-purple-300 rounded text-sm font-mono tracking-widest text-center focus:ring-2 focus:ring-purple-500 outline-none" placeholder="x-xxxx-xxxxx-xx-x" maxLength="17" />
+                                            <label className="text-xs text-gray-500 font-bold mb-1 block">เลขบัตรประจำตัวประชาชน (13 หลัก)</label>
+                                            <input type="text" name="nationalId" value={formData.nationalId} onChange={handleNationalIdChange} className="w-full p-2 border rounded text-sm font-mono tracking-widest focus:ring-2 focus:ring-ns-blue outline-none" placeholder="x-xxxx-xxxxx-xx-x" maxLength="17" />
                                         </div>
-                                        <div>
-                                            <label className="text-xs font-bold text-purple-700">ศาสนา</label>
-                                            <div className="flex gap-2">
-                                                <select name="religion" value={['อิสลาม','พุทธ','คริสต์',''].includes(formData.religion) ? formData.religion : 'อื่นๆ'} onChange={(e) => {
-                                                    if(e.target.value !== 'อื่นๆ') setFormData({...formData, religion: e.target.value});
-                                                    else setFormData({...formData, religion: ' '}); 
-                                                }} className="p-2 border border-purple-300 rounded text-sm flex-1 outline-none">
-                                                    <option value="">เลือกศาสนา</option>
-                                                    <option value="อิสลาม">อิสลาม</option>
-                                                    <option value="พุทธ">พุทธ</option>
-                                                    <option value="คริสต์">คริสต์</option>
-                                                    <option value="อื่นๆ">อื่น ๆ (ระบุ)</option>
-                                                </select>
-                                                {!['อิสลาม','พุทธ','คริสต์',''].includes(formData.religion) && formData.religion !== undefined && (
-                                                    <input type="text" name="religion" value={formData.religion.trim()} onChange={handleChange} className="p-2 border border-purple-300 rounded text-sm flex-1 outline-none" placeholder="ระบุศาสนา" />
-                                                )}
-                                            </div>
-                                        </div>
-                                    </div>
-                                    
-                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                                        <div className="md:col-span-1"><label className="text-xs text-gray-500 font-bold">วัน/เดือน/ปีเกิด</label><input type="date" name="dob" value={formData.dob} onChange={handleChange} className="w-full p-2 border rounded text-sm" /></div>
-                                        <div className="md:col-span-1"><label className="text-xs text-gray-500 font-bold">อายุ (ปี)</label><input type="text" name="age" value={formData.age} readOnly className="w-full p-2 border rounded bg-gray-100 text-sm text-center font-bold" /></div>
-                                        
-                                        <div className="md:col-span-1"><label className="text-xs text-ns-blue font-bold">ครูที่ปรึกษา (ออโต้)</label><input type="text" name="advisor" value={formData.advisor} onChange={handleChange} className="w-full p-2 border border-blue-300 rounded text-sm bg-blue-50" placeholder="ครูที่ปรึกษา" /></div>
-                                        {/* --- เพิ่มฟอร์มเบอร์โทรนักเรียน --- */}
-                                        <div className="md:col-span-1"><label className="text-xs text-green-600 font-bold">เบอร์โทรศัพท์นักเรียน</label><input type="text" name="studentTel" value={formData.studentTel} onChange={(e) => handlePhoneChange(e, 'studentTel')} className="w-full p-2 border border-green-300 rounded text-sm font-mono tracking-widest text-center focus:ring-2 focus:ring-green-500 outline-none" placeholder="xxx-xxx-xxxx" maxLength="12" /></div>
-                                    </div>
 
-                                    <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
-                                        <label className="text-xs font-bold text-gray-700 mb-2 block"><i className="fas fa-map-marker-alt text-red-500"></i> ที่อยู่ปัจจุบัน (พิมพ์เพื่อค้นหาอัตโนมัติ)</label>
-                                        <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-3">
-                                            <div className="md:col-span-1"><label className="text-xs text-gray-500">บ้านเลขที่</label><input type="text" name="addrNo" value={formData.addrNo} onChange={handleChange} className="w-full p-2 border rounded text-sm" /></div>
-                                            <div className="md:col-span-1"><label className="text-xs text-gray-500">หมู่ที่</label><input type="text" name="addrMoo" value={formData.addrMoo} onChange={handleChange} className="w-full p-2 border rounded text-sm" /></div>
-                                            
-                                            {/* --- ระบบ Autocomplete (Datalist) สำหรับ จังหวัด อำเภอ ตำบล --- */}
-                                            <div className="md:col-span-1">
-                                                <label className="text-xs text-gray-500 font-bold text-blue-600">จังหวัด</label>
-                                                <input type="text" name="addrProv" value={formData.addrProv} onChange={handleChange} list="prov-list" autoComplete="off" placeholder="พิมพ์เพื่อค้นหา" className="w-full p-2 border rounded text-sm outline-none focus:border-blue-400" />
-                                                <datalist id="prov-list">{uniqueProvinces.map(p => <option key={p} value={p} />)}</datalist>
-                                            </div>
-                                            <div className="md:col-span-1">
-                                                <label className="text-xs text-gray-500 font-bold text-blue-600">อำเภอ</label>
-                                                <input type="text" name="addrDist" value={formData.addrDist} onChange={handleChange} list="dist-list" autoComplete="off" placeholder="พิมพ์เพื่อค้นหา" disabled={!formData.addrProv} className="w-full p-2 border rounded text-sm outline-none focus:border-blue-400" />
-                                                <datalist id="dist-list">{uniqueDistricts.map(d => <option key={d} value={d} />)}</datalist>
-                                            </div>
-                                            <div className="md:col-span-1">
-                                                <label className="text-xs text-gray-500 font-bold text-blue-600">ตำบล</label>
-                                                <input type="text" name="addrSub" value={formData.addrSub} onChange={handleChange} list="sub-list" autoComplete="off" placeholder="พิมพ์เพื่อค้นหา" disabled={!formData.addrDist} className="w-full p-2 border rounded text-sm outline-none focus:border-blue-400" />
-                                                <datalist id="sub-list">{uniqueSubs.map(s => <option key={s} value={s} />)}</datalist>
-                                            </div>
-                                            <div className="md:col-span-1"><label className="text-xs text-gray-500">รหัสไปรษณีย์</label><input type="text" name="addrZip" value={formData.addrZip} onChange={handleChange} className="w-full p-2 border rounded text-sm bg-gray-100 font-bold text-center tracking-widest" placeholder="ไปรษณีย์" readOnly /></div>
+                                        <div className="md:col-span-1">
+                                            <label className="text-xs text-gray-500 font-bold mb-1 block">วันเกิด</label>
+                                            <input type="date" name="dob" value={formData.dob} onChange={handleChange} className="w-full p-2 border rounded text-sm focus:ring-2 focus:ring-ns-blue outline-none" />
                                         </div>
-                                        <div>
-                                            <label className="text-xs text-gray-500">ที่อยู่รวม (อัปเดตอัตโนมัติ)</label>
-                                            <input type="text" name="address" value={formData.address} readOnly className="w-full p-2 border border-gray-300 rounded text-sm font-bold bg-white text-gray-700" placeholder="รอการกรอกที่อยู่ด้านบน..." required />
+                                        <div className="md:col-span-1">
+                                            <label className="text-xs text-gray-500 font-bold mb-1 block">อายุ (ปี)</label>
+                                            <input type="text" name="age" value={formData.age} readOnly className="w-full p-2 border rounded bg-gray-100 text-sm text-center font-bold" />
                                         </div>
-                                    </div>
-                                    
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <div><label className="text-xs text-gray-500 font-bold">ชื่อผู้ปกครอง</label><input type="text" name="parentName" value={formData.parentName} onChange={handleChange} className="w-full p-2 border rounded text-sm" /></div>
-                                        <div><label className="text-xs text-gray-500 font-bold">เบอร์โทรผู้ปกครอง</label><input type="text" name="parentTel" value={formData.parentTel} onChange={(e) => handlePhoneChange(e, 'parentTel')} className="w-full p-2 border rounded text-sm font-mono tracking-widest text-center" placeholder="xxx-xxx-xxxx" maxLength="12" /></div>
+                                        <div className="md:col-span-2">
+                                            <label className="text-xs text-gray-500 font-bold mb-1 block">เบอร์โทรศัพท์นักเรียน</label>
+                                            <input type="text" name="studentTel" value={formData.studentTel} onChange={(e) => handlePhoneChange(e, 'studentTel')} className="w-full p-2 border rounded text-sm font-mono tracking-widest focus:ring-2 focus:ring-ns-blue outline-none" placeholder="xxx-xxx-xxxx" maxLength="12" />
+                                        </div>
+
+                                        <div className="md:col-span-2">
+                                            <label className="text-xs text-gray-500 font-bold mb-1 block">แผนการเรียน (อัตโนมัติ)</label>
+                                            <input type="text" name="program" value={formData.program} onChange={handleChange} className="w-full p-2 border rounded text-sm bg-gray-50" placeholder="อัตโนมัติตามชั้น/ห้อง" />
+                                        </div>
+                                        <div className="md:col-span-2">
+                                            <label className="text-xs text-ns-blue font-bold mb-1 block">ครูที่ปรึกษา (อิงตามฐานข้อมูลครู)</label>
+                                            <input type="text" name="advisor" value={formData.advisor} onChange={handleChange} className="w-full p-2 border border-blue-200 rounded text-sm bg-blue-50" placeholder="ระบุครูที่ปรึกษา" />
+                                        </div>
                                     </div>
                                 </div>
                             </div>
-                            <div className="mt-4 text-right border-t pt-4 flex justify-end gap-3">
-                                <button type="button" onClick={clearForm} className="bg-gray-200 text-gray-700 px-6 py-2 rounded shadow hover:bg-gray-300 font-bold">เคลียร์ฟอร์ม</button>
-                                {formData.id && (
-                                    <button type="button" onClick={() => handlePrintStudent(formData)} className="bg-purple-600 text-white px-6 py-2 rounded shadow hover:bg-purple-700 font-bold transition-colors duration-200">
-                                        <i className="fas fa-print mr-2"></i> พิมพ์ประวัติ
+
+                            {/* ส่วนที่ 2: ข้อมูลสุขภาพ */}
+                            <div className="mb-6 border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+                                <div className="bg-green-50 p-3 border-b border-green-100 flex items-center gap-3">
+                                    <div className="w-8 h-8 bg-white rounded-full flex items-center justify-center text-green-600 shadow-sm font-bold">2</div>
+                                    <h3 className="font-bold text-gray-800 text-lg">ข้อมูลสุขภาพ</h3>
+                                </div>
+                                <div className="p-5 bg-white">
+                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                                        <div>
+                                            <label className="text-xs text-gray-500 font-bold mb-1 block">น้ำหนัก (กิโลกรัม)</label>
+                                            <input type="number" step="0.1" name="weight" value={formData.weight} onChange={handleChange} className="w-full p-2 border rounded text-sm focus:ring-2 focus:ring-green-500 outline-none" placeholder="เช่น 55.5" />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs text-gray-500 font-bold mb-1 block">ส่วนสูง (เซนติเมตร)</label>
+                                            <input type="number" step="0.1" name="height" value={formData.height} onChange={handleChange} className="w-full p-2 border rounded text-sm focus:ring-2 focus:ring-green-500 outline-none" placeholder="เช่น 165" />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs text-gray-500 font-bold mb-1 block">ค่า BMI</label>
+                                            <input type="text" name="bmi" value={formData.bmi} readOnly className="w-full p-2 border rounded bg-gray-50 text-sm text-center font-bold text-ns-blue" placeholder="คำนวณอัตโนมัติ" />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs text-gray-500 font-bold mb-1 block">แปลผล</label>
+                                            <input type="text" name="bmiTranslation" value={formData.bmiTranslation} readOnly className="w-full p-2 border rounded bg-gray-50 text-sm font-bold text-ns-blue" placeholder="แปลผลอัตโนมัติ" />
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6 p-4 bg-gray-50 rounded-lg border border-gray-100">
+                                        <div className="space-y-3">
+                                            <label className="text-sm font-bold text-gray-700 block">โรคประจำตัว</label>
+                                            <div className="flex gap-4">
+                                                <label className="flex items-center gap-2 cursor-pointer">
+                                                    <input type="radio" name="hasCongenitalDisease" value="ไม่มี" checked={formData.hasCongenitalDisease === 'ไม่มี'} onChange={handleChange} className="w-4 h-4 text-green-600 focus:ring-green-500" />
+                                                    <span className="text-sm">ไม่มี</span>
+                                                </label>
+                                                <label className="flex items-center gap-2 cursor-pointer">
+                                                    <input type="radio" name="hasCongenitalDisease" value="มี" checked={formData.hasCongenitalDisease === 'มี'} onChange={handleChange} className="w-4 h-4 text-green-600 focus:ring-green-500" />
+                                                    <span className="text-sm">มี</span>
+                                                </label>
+                                            </div>
+                                            {formData.hasCongenitalDisease === 'มี' && (
+                                                <div className="animate-[fadeIn_0.2s_ease-in-out]">
+                                                    <input type="text" name="congenitalDisease" value={formData.congenitalDisease} onChange={handleChange} list="disease-list" placeholder="ระบุโรคประจำตัว" className="w-full p-2 border border-red-200 rounded text-sm focus:ring-2 focus:ring-red-400 outline-none bg-red-50" />
+                                                    <datalist id="disease-list">{commonDiseases.map(d => <option key={d} value={d} />)}</datalist>
+                                                </div>
+                                            )}
+                                            
+                                            <div className="pt-2">
+                                                <label className="text-xs text-gray-500 font-bold mb-1 block">ชื่อยาที่ต้องทานประจำ (หากมี)</label>
+                                                <input type="text" name="regularMedicine" value={formData.regularMedicine} onChange={handleChange} className="w-full p-2 border rounded text-sm focus:ring-2 focus:ring-green-500 outline-none" placeholder="ระบุชื่อยา..." />
+                                            </div>
+                                        </div>
+
+                                        <div className="space-y-3">
+                                            <label className="text-sm font-bold text-gray-700 block">ความพิการ</label>
+                                            <div className="flex gap-4">
+                                                <label className="flex items-center gap-2 cursor-pointer">
+                                                    <input type="radio" name="hasDisability" value="ไม่มี" checked={formData.hasDisability === 'ไม่มี'} onChange={handleChange} className="w-4 h-4 text-green-600 focus:ring-green-500" />
+                                                    <span className="text-sm">ไม่มี</span>
+                                                </label>
+                                                <label className="flex items-center gap-2 cursor-pointer">
+                                                    <input type="radio" name="hasDisability" value="มี" checked={formData.hasDisability === 'มี'} onChange={handleChange} className="w-4 h-4 text-green-600 focus:ring-green-500" />
+                                                    <span className="text-sm">มี</span>
+                                                </label>
+                                            </div>
+                                            {formData.hasDisability === 'มี' && (
+                                                <div className="animate-[fadeIn_0.2s_ease-in-out]">
+                                                    <input type="text" name="disability" value={formData.disability} onChange={handleChange} list="disability-list" placeholder="ระบุประเภทความพิการ" className="w-full p-2 border border-orange-200 rounded text-sm focus:ring-2 focus:ring-orange-400 outline-none bg-orange-50" />
+                                                    <datalist id="disability-list">{commonDisabilities.map(d => <option key={d} value={d} />)}</datalist>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* ส่วนที่ 3: ข้อมูลบิดา มารดา และผู้ปกครอง */}
+                            <div className="mb-6 border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+                                <div className="bg-purple-50 p-3 border-b border-purple-100 flex items-center gap-3">
+                                    <div className="w-8 h-8 bg-white rounded-full flex items-center justify-center text-purple-600 shadow-sm font-bold">3</div>
+                                    <h3 className="font-bold text-gray-800 text-lg">ข้อมูลบิดา มารดา และผู้ปกครอง</h3>
+                                </div>
+                                <div className="p-5 bg-white space-y-4">
+                                    
+                                    {/* --- ข้อมูลบิดา --- */}
+                                    <div className="flex justify-between items-center border-b pb-2 mb-3">
+                                        <h4 className="text-sm font-bold text-gray-700 text-left"><i className="fa-solid fa-person mr-2 text-blue-500"></i>ข้อมูลบิดา</h4>
+                                        <label className="flex items-center gap-2 cursor-pointer bg-white px-3 py-1.5 rounded-full shadow-sm border border-gray-200 hover:bg-gray-100 transition">
+                                            <input type="checkbox" name="fatherUnemployed" checked={formData.fatherUnemployed} onChange={handleChange} className="w-full p-2 border rounded text-sm focus:ring-2 focus:ring-purple-500 outline-none" />
+                                            <span className="text-xs font-bold text-red-500">ไม่ได้ประกอบอาชีพ</span>
+                                        </label>
+                                    </div>
+                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+                                        <div className="md:col-span-1">
+                                            <label className="text-xs text-gray-500 font-bold mb-1 block">ชื่อ-สกุลบิดา</label>
+                                            <input type="text" name="fatherName" value={formData.fatherName} onChange={handleChange} className="w-full p-2 border rounded text-sm focus:ring-2 focus:ring-purple-500 outline-none" placeholder="ระบุชื่อ-สกุล" />
+                                        </div>
+                                        <div className="md:col-span-1">
+                                            <label className="text-xs text-gray-500 font-bold mb-1 block">เบอร์โทรศัพท์บิดา</label>
+                                            <input type="text" name="fatherTel" value={formData.fatherTel} onChange={(e) => handlePhoneChange(e, 'fatherTel')} className="w-full p-2 border rounded text-sm font-mono tracking-widest focus:ring-2 focus:ring-purple-500 outline-none" placeholder="xxx-xxx-xxxx" maxLength="12" />
+                                        </div>
+                                        <div className="md:col-span-1">
+                                            <label className="text-xs text-gray-500 font-bold mb-1 block">อาชีพบิดา</label>
+                                            <input type="text" name="fatherOccupation" value={formData.fatherOccupation} onChange={handleChange} disabled={formData.fatherUnemployed} className={`w-full p-2 border rounded text-sm focus:ring-2 focus:ring-purple-500 outline-none ${formData.fatherUnemployed ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-white'}`} placeholder="ระบุอาชีพ" />
+                                        </div>
+                                        <div className="md:col-span-1">
+                                            <label className="text-xs text-gray-500 font-bold mb-1 block">รายได้บิดาต่อเดือน (บาท)</label>
+                                            <input type="text" name="fatherIncome" value={formData.fatherIncome} onChange={handleChange} disabled={formData.fatherUnemployed} className={`w-full p-2 border rounded text-sm focus:ring-2 focus:ring-purple-500 outline-none ${formData.fatherUnemployed ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-white'}`} placeholder="เช่น 15000" />
+                                        </div>
+                                    </div>
+
+                                    {/* --- ข้อมูลมารดา --- */}
+                                    <div className="flex justify-between items-center border-b pb-2 mb-3 mt-6">
+                                        <h4 className="text-sm font-bold text-gray-700 text-left"><i className="fa-solid fa-person-dress mr-2 text-pink-500"></i>ข้อมูลมารดา</h4>
+                                        <label className="flex items-center gap-2 cursor-pointer bg-white px-3 py-1.5 rounded-full shadow-sm border border-gray-200 hover:bg-gray-100 transition">
+                                            <input type="checkbox" name="motherUnemployed" checked={formData.motherUnemployed} onChange={handleChange} className="w-full p-2 border rounded text-sm focus:ring-2 focus:ring-purple-500 outline-none" />
+                                            <span className="text-xs font-bold text-red-500">ไม่ได้ประกอบอาชีพ</span>
+                                        </label>
+                                    </div>
+                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+                                        <div className="md:col-span-1">
+                                            <label className="text-xs text-gray-500 font-bold mb-1 block">ชื่อ-สกุลมารดา</label>
+                                            <input type="text" name="motherName" value={formData.motherName} onChange={handleChange} className="w-full p-2 border rounded text-sm focus:ring-2 focus:ring-purple-500 outline-none" placeholder="ระบุชื่อ-สกุล" />
+                                        </div>
+                                        <div className="md:col-span-1">
+                                            <label className="text-xs text-gray-500 font-bold mb-1 block">เบอร์โทรศัพท์มารดา</label>
+                                            <input type="text" name="motherTel" value={formData.motherTel} onChange={(e) => handlePhoneChange(e, 'motherTel')} className="w-full p-2 border rounded text-sm font-mono tracking-widest focus:ring-2 focus:ring-purple-500 outline-none" placeholder="xxx-xxx-xxxx" maxLength="12" />
+                                        </div>
+                                        <div className="md:col-span-1">
+                                            <label className="text-xs text-gray-500 font-bold mb-1 block">อาชีพมารดา</label>
+                                            <input type="text" name="motherOccupation" value={formData.motherOccupation} onChange={handleChange} disabled={formData.motherUnemployed} className={`w-full p-2 border rounded text-sm focus:ring-2 focus:ring-purple-500 outline-none ${formData.motherUnemployed ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-white'}`} placeholder="ระบุอาชีพ" />
+                                        </div>
+                                        <div className="md:col-span-1">
+                                            <label className="text-xs text-gray-500 font-bold mb-1 block">รายได้มารดาต่อเดือน (บาท)</label>
+                                            <input type="text" name="motherIncome" value={formData.motherIncome} onChange={handleChange} disabled={formData.motherUnemployed} className={`w-full p-2 border rounded text-sm focus:ring-2 focus:ring-purple-500 outline-none ${formData.motherUnemployed ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-white'}`} placeholder="เช่น 15000" />
+                                        </div>
+                                    </div>
+
+                                    {/* --- สถานะครอบครัวและการอยู่อาศัย --- */}
+                                    <h4 className="text-sm font-bold text-gray-700 border-b pb-2 mb-3 text-left mt-6"><i className="fa-solid fa-house-chimney-user mr-2 text-purple-500"></i>สถานะครอบครัวและการอยู่อาศัย</h4>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 bg-purple-50/50 p-4 rounded-lg border border-purple-100">
+                                        <div>
+                                            <label className="text-xs text-purple-800 font-bold mb-2 block">สถานะบิดามารดาปัจจุบัน</label>
+                                            <select name="parentsStatus" value={formData.parentsStatus} onChange={handleChange} className="w-full p-2 border border-purple-300 rounded text-sm focus:ring-2 focus:ring-purple-500 outline-none bg-white">
+                                                <option value="">-- เลือกสถานะ --</option>
+                                                <option value="บิดามารดาอยู่ด้วยกัน">บิดามารดาอยู่ด้วยกัน</option>
+                                                <option value="บิดามารดาแยกกันอยู่">บิดามารดาแยกกันอยู่</option>
+                                                <option value="บิดาถึงแก่กรรม">บิดาถึงแก่กรรม</option>
+                                                <option value="มารดาถึงแก่กรรม">มารดาถึงแก่กรรม</option>
+                                                <option value="ไม่ทราบสถานะบิดามารดา">ไม่ทราบสถานะบิดามารดา</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="text-xs text-purple-800 font-bold mb-2 block">ปัจจุบันนักเรียนอาศัยอยู่กับ <span className="text-red-500">* (ดึงข้อมูลอัตโนมัติ)</span></label>
+                                            <select name="livingWith" value={formData.livingWith} onChange={handleChange} className="w-full p-2 border border-purple-300 rounded text-sm font-bold text-ns-blue focus:ring-2 focus:ring-purple-500 outline-none bg-white">
+                                                <option value="">-- เลือกผู้ที่อาศัยอยู่ด้วย --</option>
+                                                <option value="บิดามารดา">บิดามารดา (ระบบจะดึงข้อมูลมารดา)</option>
+                                                <option value="บิดา">บิดา (ระบบจะดึงข้อมูลบิดา)</option>
+                                                <option value="มารดา">มารดา (ระบบจะดึงข้อมูลมารดา)</option>
+                                                <option value="ผู้ปกครองที่ไม่ใช่บิดามารดา">ผู้ปกครองที่ไม่ใช่บิดามารดา (กรอกข้อมูลด้านล่างเอง)</option>
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    <h4 className="text-sm font-bold text-ns-blue border-b pb-2 mb-3 text-left mt-6"><i className="fa-solid fa-address-card mr-2"></i>ข้อมูลผู้ปกครอง (ใช้สำหรับติดต่อหลัก)</h4>
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                        <div className="md:col-span-1">
+                                            <label className="text-xs text-gray-500 font-bold mb-1 block">ชื่อ-สกุลผู้ปกครอง</label>
+                                            <input type="text" name="parentName" value={formData.parentName} onChange={handleChange} className="w-full p-2 border rounded text-sm focus:ring-2 focus:ring-purple-500 outline-none" placeholder="ชื่อ-นามสกุล" />
+                                        </div>
+                                        <div className="md:col-span-1">
+                                            <label className="text-xs text-gray-500 font-bold mb-1 block">ความเกี่ยวข้องเป็น</label>
+                                            <select name="parentRelation" value={['บิดา','มารดา','ปู่','ย่า','ตา','ยาย','ลุง','ป้า','น้า','อา','พี่',''].includes(formData.parentRelation) ? formData.parentRelation : 'อื่นๆ'} onChange={(e) => {
+                                                if(e.target.value !== 'อื่นๆ') setFormData({...formData, parentRelation: e.target.value});
+                                                else setFormData({...formData, parentRelation: ' '}); 
+                                            }} className="w-full p-2 border rounded text-sm focus:ring-2 focus:ring-purple-500 outline-none">
+                                                <option value="">เลือกความเกี่ยวข้อง</option>
+                                                <option value="บิดา">บิดา</option><option value="มารดา">มารดา</option>
+                                                <option value="ปู่">ปู่</option><option value="ย่า">ย่า</option>
+                                                <option value="ตา">ตา</option><option value="ยาย">ยาย</option>
+                                                <option value="ลุง">ลุง</option><option value="ป้า">ป้า</option>
+                                                <option value="น้า">น้า</option><option value="อา">อา</option><option value="พี่">พี่</option>
+                                                <option value="อื่นๆ">อื่น ๆ</option>
+                                            </select>
+                                            {!['บิดา','มารดา','ปู่','ย่า','ตา','ยาย','ลุง','ป้า','น้า','อา','พี่',''].includes(formData.parentRelation) && formData.parentRelation !== undefined && formData.parentRelation !== '' && (
+                                                <input type="text" name="parentRelation" value={formData.parentRelation.trim()} onChange={handleChange} className="w-full p-2 border rounded text-sm mt-1 focus:ring-2 focus:ring-purple-500 outline-none" placeholder="ระบุความเกี่ยวข้อง" />
+                                            )}
+                                        </div>
+                                        <div className="md:col-span-1">
+                                            <label className="text-xs text-gray-500 font-bold mb-1 block">เบอร์โทรศัพท์ติดต่อ</label>
+                                            <input type="text" name="parentTel" value={formData.parentTel || ''} onChange={(e) => handlePhoneChange(e, 'parentTel')} className="w-full p-2 border rounded text-sm font-mono tracking-widest focus:ring-2 focus:ring-purple-500 outline-none" placeholder="xxx-xxx-xxxx" maxLength="12" />
+                                        </div>
+                                    </div>
+                                    <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                                        <div className="flex justify-between items-center mb-3">
+                                            <h4 className="text-sm font-bold text-gray-700">ข้อมูลการทำงานและรายได้</h4>
+                                            <label className="flex items-center gap-2 cursor-pointer bg-white px-3 py-1.5 rounded-full shadow-sm border border-gray-200 hover:bg-gray-100 transition">
+                                                <input type="checkbox" name="parentUnemployed" checked={formData.parentUnemployed} onChange={handleChange} className="w-4 h-4 text-purple-600 rounded focus:ring-purple-500" />
+                                                <span className="text-xs font-bold text-red-500">ไม่ได้ประกอบอาชีพ</span>
+                                            </label>
+                                        </div>
+                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                            <div className="md:col-span-1">
+                                                <label className="text-xs text-gray-500 font-bold mb-1 block">อาชีพผู้ปกครอง</label>
+                                                <input type="text" name="parentOccupation" value={formData.parentOccupation} onChange={handleChange} disabled={formData.parentUnemployed} className={`w-full p-2 border rounded text-sm focus:ring-2 focus:ring-purple-500 outline-none ${formData.parentUnemployed ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-white'}`} placeholder="ระบุอาชีพ" />
+                                            </div>
+                                            <div className="md:col-span-1">
+                                                <label className="text-xs text-gray-500 font-bold mb-1 block">สถานที่ทำงาน</label>
+                                                <input type="text" name="parentWorkplace" value={formData.parentWorkplace} onChange={handleChange} disabled={formData.parentUnemployed} className={`w-full p-2 border rounded text-sm focus:ring-2 focus:ring-purple-500 outline-none ${formData.parentUnemployed ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-white'}`} placeholder="ระบุสถานที่ทำงาน" />
+                                            </div>
+                                            <div className="md:col-span-1">
+                                                <label className="text-xs text-gray-500 font-bold mb-1 block">รายได้ผู้ปกครองต่อเดือน (บาท)</label>
+                                                <input type="text" name="parentIncome" value={formData.parentIncome} onChange={handleChange} disabled={formData.parentUnemployed} className={`w-full p-2 border rounded text-sm focus:ring-2 focus:ring-purple-500 outline-none ${formData.parentUnemployed ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-white'}`} placeholder="เช่น 15000" />
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* ส่วนที่ 4: ที่อยู่ปัจจุบัน */}
+                            <div className="mb-6 border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+                                <div className="bg-orange-50 p-3 border-b border-orange-100 flex items-center gap-3">
+                                    <div className="w-8 h-8 bg-white rounded-full flex items-center justify-center text-orange-500 shadow-sm font-bold">4</div>
+                                    <h3 className="font-bold text-gray-800 text-lg">ที่อยู่ปัจจุบันที่สามารถติดต่อได้</h3>
+                                </div>
+                                <div className="p-5 bg-white">
+                                    <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-4">
+                                        <div className="md:col-span-1">
+                                            <label className="text-xs text-gray-500 font-bold mb-1 block">บ้านเลขที่</label>
+                                            <input type="text" name="addrNo" value={formData.addrNo} onChange={handleChange} className="w-full p-2 border rounded text-sm focus:ring-2 focus:ring-orange-500 outline-none" />
+                                        </div>
+                                        <div className="md:col-span-1">
+                                            <label className="text-xs text-gray-500 font-bold mb-1 block">หมู่ที่</label>
+                                            <input type="text" name="addrMoo" value={formData.addrMoo} onChange={handleChange} className="w-full p-2 border rounded text-sm focus:ring-2 focus:ring-orange-500 outline-none" />
+                                        </div>
+                                        
+                                        {/* --- ระบบ Autocomplete สำหรับ จังหวัด อำเภอ ตำบล --- */}
+                                        <div className="md:col-span-1">
+                                            <label className="text-xs text-blue-600 font-bold mb-1 block">จังหวัด <i className="fas fa-search ml-1"></i></label>
+                                            <input type="text" name="addrProv" value={formData.addrProv} onChange={handleChange} list="prov-list" autoComplete="off" placeholder="พิมพ์/เลือก" className="w-full p-2 border border-blue-200 rounded text-sm outline-none focus:ring-2 focus:ring-blue-400 bg-blue-50" />
+                                            <datalist id="prov-list">{uniqueProvinces.map(p => <option key={p} value={p} />)}</datalist>
+                                        </div>
+                                        <div className="md:col-span-1">
+                                            <label className="text-xs text-blue-600 font-bold mb-1 block">อำเภอ <i className="fas fa-search ml-1"></i></label>
+                                            <input type="text" name="addrDist" value={formData.addrDist} onChange={handleChange} list="dist-list" autoComplete="off" placeholder="พิมพ์/เลือก" disabled={!formData.addrProv} className="w-full p-2 border border-blue-200 rounded text-sm outline-none focus:ring-2 focus:ring-blue-400 bg-blue-50 disabled:opacity-50" />
+                                            <datalist id="dist-list">{uniqueDistricts.map(d => <option key={d} value={d} />)}</datalist>
+                                        </div>
+                                        <div className="md:col-span-1">
+                                            <label className="text-xs text-blue-600 font-bold mb-1 block">ตำบล <i className="fas fa-search ml-1"></i></label>
+                                            <input type="text" name="addrSub" value={formData.addrSub} onChange={handleChange} list="sub-list" autoComplete="off" placeholder="พิมพ์/เลือก" disabled={!formData.addrDist} className="w-full p-2 border border-blue-200 rounded text-sm outline-none focus:ring-2 focus:ring-blue-400 bg-blue-50 disabled:opacity-50" />
+                                            <datalist id="sub-list">{uniqueSubs.map(s => <option key={s} value={s} />)}</datalist>
+                                        </div>
+                                        <div className="md:col-span-1">
+                                            <label className="text-xs text-gray-500 font-bold mb-1 block">รหัสไปรษณีย์</label>
+                                            <input type="text" name="addrZip" value={formData.addrZip} onChange={handleChange} className="w-full p-2 border rounded text-sm bg-gray-100 font-bold text-center tracking-widest" placeholder="อัตโนมัติ" readOnly />
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="text-xs text-gray-500 font-bold mb-1 block">ที่อยู่รวม (อัปเดตอัตโนมัติ)</label>
+                                        <input type="text" name="address" value={formData.address} readOnly className="w-full p-3 border border-gray-300 rounded-lg text-sm font-bold bg-gray-50 text-gray-700" placeholder="รอการกรอกที่อยู่ด้านบน..." />
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="mt-6 border-t pt-4 flex flex-col md:flex-row justify-between items-center gap-4">
+                                <p className="text-xs text-red-500 font-bold">* โปรดตรวจสอบความถูกต้องก่อนกดบันทึกข้อมูล</p>
+                                <div className="flex gap-3 w-full md:w-auto">
+                                    <button type="button" onClick={clearForm} className="flex-1 md:flex-none bg-gray-200 text-gray-700 px-6 py-2.5 rounded-lg shadow hover:bg-gray-300 font-bold transition">เคลียร์ฟอร์ม</button>
+                                    {formData.id && (
+                                        <button type="button" onClick={() => executePrint(formData)} className="flex-1 md:flex-none bg-purple-600 text-white px-6 py-2.5 rounded-lg shadow hover:bg-purple-700 font-bold transition-colors duration-200">
+                                            <i className="fas fa-print mr-2"></i> พิมพ์ประวัติ
+                                        </button>
+                                    )}
+                                    <button type="submit" disabled={isSaving} className={`flex-1 md:flex-none ${formData.id ? 'bg-green-600 hover:bg-green-700' : 'bg-ns-blue hover:bg-blue-800'} text-white px-8 py-2.5 rounded-lg shadow font-bold transition-colors duration-200 disabled:opacity-50`}>
+                                        {isSaving ? <i className="fas fa-spinner fa-spin mr-2"></i> : <i className={formData.id ? "fas fa-edit mr-2" : "fas fa-save mr-2"}></i>} 
+                                        {isSaving ? 'กำลังบันทึก...' : (formData.id ? 'ยืนยันการแก้ไข' : 'บันทึกประวัตินักเรียน')}
                                     </button>
-                                )}
-                                <button type="submit" disabled={isSaving} className={`${formData.id ? 'bg-green-600 hover:bg-green-700' : 'bg-ns-blue hover:bg-blue-800'} text-white px-8 py-2 rounded shadow font-bold transition-colors duration-200 disabled:opacity-50`}>
-                                    <i className={formData.id ? "fas fa-edit mr-2" : "fas fa-save mr-2"}></i> {isSaving ? 'กำลังบันทึก...' : (formData.id ? 'ยืนยันแก้ไข' : 'บันทึกประวัตินักเรียน')}
-                                </button>
+                                </div>
                             </div>
                         </form>
                     </div>
 
-                    <div className="bg-white p-6 rounded-xl shadow-sm">
+                    <div className="bg-white p-6 rounded-xl shadow-sm border-t-4 border-gray-600">
                         <div className="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
                             <div className="flex flex-wrap items-center gap-3">
-                                <h3 className="font-bold text-ns-blue text-lg">ฐานข้อมูลนักเรียน</h3>
-                                <select value={filterClass} onChange={e=>setFilterClass(e.target.value)} className="p-1.5 border rounded text-sm shadow-sm bg-gray-50">
+                                <h3 className="font-bold text-gray-800 text-lg"><i className="fa-solid fa-database mr-2"></i> ฐานข้อมูลนักเรียน</h3>
+                                <select value={filterClass} onChange={e=>setFilterClass(e.target.value)} className="p-1.5 border rounded text-sm shadow-sm bg-gray-50 outline-none focus:ring-1 focus:ring-gray-300">
                                     <option value="">ทุกชั้นเรียน</option>
-                                    <option value="ม.1">ม.1</option><option value="ม.2">ม.2</option><option value="ม.3">ม.3</option>
-                                    <option value="ม.4">ม.4</option><option value="ม.5">ม.5</option><option value="ม.6">ม.6</option>
+                                    {uniqueClasses.map(c => <option key={c} value={c}>{c}</option>)}
                                 </select>
-                                <select value={filterRoom} onChange={e=>setFilterRoom(e.target.value)} className="p-1.5 border rounded text-sm shadow-sm bg-gray-50">
+                                <select value={filterRoom} onChange={e=>setFilterRoom(e.target.value)} className="p-1.5 border rounded text-sm shadow-sm bg-gray-50 outline-none focus:ring-1 focus:ring-gray-300" disabled={!filterClass}>
                                     <option value="">ทุกห้อง</option>
-                                    <option value="1">1</option><option value="2">2</option><option value="3">3</option>
-                                    <option value="4">4</option><option value="5">5</option><option value="6">6</option>
-                                    <option value="7">7</option><option value="8">8</option><option value="9">9</option>
-                                    <option value="10">10</option>
+                                    {uniqueRooms.map(r => <option key={r} value={r}>{r}</option>)}
                                 </select>
                             </div>
                             <div className="flex items-center gap-3">
-                                <span className="text-sm font-bold text-gray-500 bg-gray-100 px-3 py-1 rounded-full">พบ {filteredStudents.length} คน</span>
-                                {isSyncing && <span className="text-sm font-medium text-gray-600"><i className="fas fa-spinner fa-spin"></i> กำลังโหลด...</span>}
-                                <button onClick={onRefresh} className="text-sm bg-ns-yellow text-ns-blue px-3 py-1 rounded shadow hover:bg-yellow-500 font-medium"><i className="fas fa-sync"></i> รีเฟรช</button>
+                                <span className="text-sm font-bold text-gray-500 bg-gray-100 px-3 py-1.5 rounded-full shadow-inner">พบ {filteredStudents.length} คน</span>
+                                {isSyncing && <span className="text-sm font-bold text-ns-blue animate-pulse"><i className="fas fa-sync fa-spin mr-1"></i> กำลังโหลด...</span>}
+                                <button onClick={onRefresh} className="text-sm bg-gray-800 text-white px-3 py-1.5 rounded shadow hover:bg-black font-bold transition"><i className="fas fa-sync mr-1"></i> รีเฟรช</button>
+                                <button onClick={exportToExcel} className="text-sm bg-green-600 text-white px-3 py-1.5 rounded shadow hover:bg-green-700 font-bold transition flex items-center">
+                                    <i className="fa-solid fa-file-excel mr-1"></i> ดาวน์โหลด Excel
+                                </button>
                             </div>
                         </div>
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-sm text-left border">
-                                <thead className="bg-gray-100 text-gray-600 border-b">
+                        <div className="overflow-x-auto rounded-lg border border-gray-200">
+                            <table className="w-full text-sm text-left">
+                                <thead className="bg-gray-100 text-gray-700 border-b">
                                     <tr>
-                                        <th className="p-3">รูป</th>
+                                        <th className="p-3 text-center">รูป</th>
                                         <th className="p-3">เลขประจำตัว</th>
-                                        <th className="p-3">เลขบัตรประชาชน</th>
                                         <th className="p-3">ชื่อ-สกุล</th>
-                                        <th className="p-3">ชั้น/ห้อง</th>
+                                        <th className="p-3 text-center">ชั้น/ห้อง</th>
                                         <th className="p-3">ครูที่ปรึกษา</th>
                                         <th className="p-3 text-center">จัดการ</th>
                                     </tr>
                                 </thead>
-                                <tbody className="divide-y divide-gray-200">
+                                <tbody className="divide-y divide-gray-100">
                                     {filteredStudents.length > 0 ? filteredStudents.map(s => (
-                                        <tr key={s.id} className="hover:bg-gray-50">
-                                            <td className="p-3">
-                                                {s.photoBase64 ? <img src={s.photoBase64} className="w-10 h-10 rounded-full object-cover border shadow-sm" alt="stu" /> : <i className="fas fa-user-circle text-3xl text-gray-300"></i>}
+                                        <tr key={s.id} className="hover:bg-gray-50 transition">
+                                            <td className="p-3 text-center">
+                                                {s.photoBase64 ? <img src={s.photoBase64} className="w-10 h-10 rounded-full object-cover border shadow-sm mx-auto" alt="stu" /> : <i className="fas fa-user-circle text-3xl text-gray-300"></i>}
                                             </td>
-                                            <td className="p-3 font-bold text-ns-blue">{s.code}</td>
-                                            <td className="p-3 text-gray-600 font-mono text-xs tracking-wider">{s.nationalId || '-'}</td>
-                                            <td className="p-3 font-medium text-gray-800">{s.name}</td>
-                                            <td className="p-3 text-purple-700 font-bold">{s.classLevel}/{s.room}</td>
+                                            <td className="p-3 font-bold text-ns-blue font-mono">{s.code}</td>
+                                            <td className="p-3 font-bold text-gray-800">{s.name}</td>
+                                            <td className="p-3 text-center text-purple-700 font-bold bg-purple-50">{s.classLevel}/{s.room}</td>
                                             <td className="p-3 text-gray-600 text-xs">{s.advisor || '-'}</td>
-                                            <td className="p-3 text-center space-x-2 w-36 whitespace-nowrap">
-                                                {/* --- ปุ่มพิมพ์เอกสาร ย้ายไปไว้ข้างปุ่มบันทึกแล้ว --- */}
-                                                <button onClick={() => editStudent(s)} className="text-blue-500 hover:text-blue-700 bg-blue-100 p-1.5 rounded shadow-sm transition" title="แก้ไข"><i className="fas fa-edit"></i></button>
-                                                <button onClick={() => deleteStudent(s.id)} className="text-red-500 hover:text-red-700 bg-red-100 p-1.5 rounded shadow-sm transition" title="ลบ"><i className="fas fa-trash"></i></button>
+                                            <td className="p-3 text-center space-x-2 w-28 whitespace-nowrap">
+                                                <button onClick={() => editStudent(s)} className="text-blue-600 hover:text-blue-800 hover:bg-blue-100 p-2 rounded shadow-sm transition" title="แก้ไข/ดูรายละเอียด"><i className="fas fa-edit"></i></button>
+                                                <button onClick={() => deleteStudent(s.id)} className="text-red-600 hover:text-red-800 hover:bg-red-100 p-2 rounded shadow-sm transition" title="ลบข้อมูล"><i className="fas fa-trash"></i></button>
                                             </td>
                                         </tr>
                                     )) : (
                                         <tr>
-                                            <td colSpan="7" className="p-8 text-center text-gray-400 bg-gray-50">
-                                                <i className="fas fa-search text-3xl mb-3 block opacity-50"></i>
-                                                ยังไม่มีข้อมูลนักเรียน หรือไม่พบนักเรียนจากการค้นหา
+                                            <td colSpan="6" className="p-10 text-center text-gray-400 bg-gray-50">
+                                                <i className="fas fa-search text-4xl mb-3 block text-gray-300"></i>
+                                                <span className="font-bold text-lg">ยังไม่มีข้อมูลนักเรียน หรือไม่พบนักเรียนจากการค้นหา</span>
                                             </td>
                                         </tr>
                                     )}
@@ -3872,6 +4603,8 @@
                             </table>
                         </div>
                     </div>
+
+                    {/* (Modal Print Preview เดิมถูกลบออกและเปลี่ยนเป็นหน้าต่างใหม่แบบสมบูรณ์) */}
 
                     {/* Modal ยืนยันการเลื่อนชั้น */}
                     {promoteModalOpen && (
@@ -3909,7 +4642,7 @@
                 </div>
             );
         };
-        
+
         // 8.5 หน้าจัดการข้อมูลครู (TeacherManager)
         const TeacherManager = ({ teachers, setTeachers, isSyncing, onRefresh }) => {
             const [formData, setFormData] = useState({
@@ -8852,6 +9585,10 @@
                 const isPortrait = ['stats', 'absent_stats', 'ranking', 'eval', 'parent_reg'].includes(activeTab);
                 const defaultPageLayout = isPortrait ? 'portrait' : 'landscape';
 
+                const scriptOpen = "<scr" + "ipt>";
+                const scriptClose = "</scr" + "ipt>";
+                const tailwindScript = "<scr" + "ipt src='https://cdn.tailwindcss.com'></scr" + "ipt>";
+
                 printWindow.document.write(`
                     <!DOCTYPE html>
                     <html lang="th">
@@ -8867,7 +9604,7 @@
                             
                             .preview-toolbar { position: fixed; top: 0; left: 0; right: 0; background: #1e293b; color: white; padding: 15px 30px; display: flex; flex-direction: column; gap: 10px; z-index: 9999; box-shadow: 0 4px 10px rgba(0,0,0,0.5); box-sizing: border-box; border-bottom: 3px solid #3b82f6; }
                             .toolbar-top { display: flex; justify-content: space-between; align-items: center; }
-                            .toolbar-bottom { display: flex; justify-content: flex-start; align-items: center; gap: 20px; background: #334155; padding: 10px 15px; border-radius: 8px; }
+                            .toolbar-bottom { display: flex; justify-content: flex-start; align-items: center; gap: 20px; background: #334155; padding: 10px 15px; border-radius: 8px; flex-wrap: wrap; }
                             
                             .setting-group { display: flex; align-items: center; gap: 8px; font-size: 14pt; }
                             .setting-group select { padding: 4px 8px; border-radius: 4px; border: 1px solid #cbd5e1; font-family: 'Sarabun', sans-serif; font-size: 14pt; color: #1e293b; outline: none; cursor: pointer; }
@@ -8904,17 +9641,17 @@
                             @media print {
                                 .preview-toolbar { display: none !important; }
                                 body { padding-top: 0; background-color: white; }
-                                .a4-container { margin: 0; padding: 0; box-shadow: none; width: 100%; max-width: 100%; min-height: auto; overflow: visible; }
+                                .a4-container { margin: 0; padding: 0; box-shadow: none; width: 100%; max-width: 100%; min-height: auto; overflow: visible; zoom: var(--print-zoom, 1); }
                             }
                         </style>
-                        \x3Cscript src="https://cdn.tailwindcss.com">\x3C/script>
-                        \x3Cscript>
+                        ${tailwindScript}
+                        ${scriptOpen}
                             function updatePrintStyles() {
                                 const size = document.getElementById('paperSize').value;
                                 const orientation = document.getElementById('orientation').value;
                                 const margin = document.getElementById('margin').value;
+                                const fitScale = document.getElementById('fitToPage') ? document.getElementById('fitToPage').value : '1';
 
-                                // อัปเดตการตั้งค่า @page สำหรับตอนพิมพ์จริง
                                 const styleId = 'dynamic-print-style';
                                 let styleEl = document.getElementById(styleId);
                                 if (!styleEl) {
@@ -8924,7 +9661,6 @@
                                 }
                                 styleEl.innerHTML = '@page { size: ' + size + ' ' + orientation + '; margin: ' + margin + '; }';
 
-                                // อัปเดตขนาดพรีวิวบนหน้าจอ
                                 const container = document.querySelector('.a4-container');
                                 container.style.padding = margin;
                                 
@@ -8938,22 +9674,25 @@
                                 container.style.maxWidth = width;
                                 container.style.minHeight = minHeight;
                                 
-                                // ปรับฟอนต์ยืดหยุ่นตามแนวกระดาษ (แนวนอนใช้ฟอนต์ใหญ่ขึ้นได้)
+                                if(document.getElementById('fitToPage')) {
+                                    container.style.zoom = fitScale;
+                                    document.documentElement.style.setProperty('--print-zoom', fitScale);
+                                }
+                                
                                 const thTds = document.querySelectorAll('th, td');
                                 const isLandscapeOrA3 = orientation === 'landscape' || size === 'A3';
                                 const baseFontSize = isLandscapeOrA3 ? '12pt' : '10pt';
                                 thTds.forEach(el => { el.style.setProperty('font-size', baseFontSize, 'important'); });
                             }
 
-                            // เซ็ตค่าตั้งต้นตอนเปิดหน้าต่าง
                             window.onload = function() {
                                 document.getElementById('orientation').value = '${defaultPageLayout}';
                                 updatePrintStyles();
                             };
-                        \x3C/script>
+                        ${scriptClose}
                     </head>
                     <body>
-                        <div class="preview-toolbar">
+                        <div class="preview-toolbar no-print">
                             <div class="toolbar-top">
                                 <div style="font-size: 18pt; font-weight: bold; color: #f8fafc !important;">
                                     ระบบรายงานผล (Print Preview)
@@ -8991,6 +9730,17 @@
                                         <option value="10mm">แคบ (10mm)</option>
                                         <option value="5mm">แคบมาก (5mm)</option>
                                         <option value="20mm">กว้าง (20mm)</option>
+                                    </select>
+                                </div>
+                                <div class="setting-group">
+                                    <label>🔍 ขนาดเนื้อหา (Fit):</label>
+                                    <select id="fitToPage" onchange="updatePrintStyles()" style="background-color: #fef08a; border-color: #facc15; color: #854d0e; font-weight: bold;">
+                                        <option value="1">100% (พอดี 1 หน้า)</option>
+                                        <option value="0.95">ย่อ 95%</option>
+                                        <option value="0.9">ย่อ 90%</option>
+                                        <option value="0.85">ย่อ 85%</option>
+                                        <option value="0.8">ย่อ 80%</option>
+                                        <option value="0.75">ย่อ 75%</option>
                                     </select>
                                 </div>
                             </div>
@@ -12864,32 +13614,89 @@
                     }
                     
                     if (rows.length > 1) {
+                        // 💡 ตรวจสอบคอลัมน์ให้ครบ 37 คอลัมน์ (ถึงคอลัมน์ AK)
+                        if (rows[0].length < 37) {
+                            console.warn("ตรวจพบ CSV แคชเก่า (คอลัมน์ไม่ครบ) ระบบจะสลับไปดึงข้อมูลตรงจากฐานข้อมูล...");
+                            throw new Error("CSV Cache outdated");
+                        }
+
                         const parsedStudents = [];
                         for(let i=1; i<rows.length; i++) {
                             const cols = rows[i];
                             if (!cols || cols.length === 0) continue;
                             
-                            const id = cols[0]; 
-                            const code = cols[1]; 
-                            if (!code || code.trim() === '') continue;
+                            const id = cols[0] ? cols[0].trim() : ''; 
+                            const code = cols[1] ? cols[1].trim() : ''; 
+                            if (!code) continue;
 
-                            const name = cols[2] || 'ไม่ระบุชื่อ'; 
-                            const classRoomStr = cols[3] || ''; 
+                            const name = cols[2] ? cols[2].trim() : 'ไม่ระบุชื่อ'; 
+                            const classRoomStr = cols[3] ? cols[3].trim() : ''; 
                             const classRoomArr = classRoomStr.split('/');
                             
+                            const parseThaiDateToISO = (thaiDateStr) => {
+                                if (!thaiDateStr) return '';
+                                const str = String(thaiDateStr).trim();
+                                if (str.match(/^\d{4}-\d{2}-\d{2}$/)) return str; 
+                                
+                                const months = {
+                                    'มกราคม': '01', 'กุมภาพันธ์': '02', 'มีนาคม': '03', 'เมษายน': '04',
+                                    'พฤษภาคม': '05', 'มิถุนายน': '06', 'กรกฎาคม': '07', 'สิงหาคม': '08',
+                                    'กันยายน': '09', 'ตุลาคม': '10', 'พฤศจิกายน': '11', 'ธันวาคม': '12'
+                                };
+                                const parts = str.split(/\s+/);
+                                if (parts.length >= 3) {
+                                    const d = parts[0].padStart(2, '0');
+                                    const m = months[parts[1]];
+                                    let y = parseInt(parts[2], 10);
+                                    if (!isNaN(y)) {
+                                        if (y > 2400) y -= 543; 
+                                        if (d && m) return `${y}-${m}-${d}`;
+                                    }
+                                }
+                                return str; 
+                            };
+
+                            // 💡 เรียงลำดับ Index ให้ตรงกับคอลัมน์เป๊ะๆ ป้องกันข้อมูลเลื่อน
                             parsedStudents.push({
                                 id: id || code,
                                 code: code,
                                 name: name,
                                 classLevel: classRoomArr[0] ? classRoomArr[0].trim() : '',
                                 room: classRoomArr[1] ? classRoomArr[1].trim() : '',
-                                program: cols[4] || '', 
-                                dob: cols[5] || '', 
-                                advisor: cols[6] || '', 
-                                address: cols[7] || '', 
-                                parentName: cols[8] || '', 
-                                parentTel: cols[9] || '', 
-                                photoBase64: cols[10] || '' 
+                                program: cols[4] ? cols[4].trim() : '', 
+                                dobStr: cols[5] ? cols[5].trim() : '', 
+                                dob: parseThaiDateToISO(cols[5]), 
+                                advisor: cols[6] ? cols[6].trim() : '', 
+                                address: cols[7] ? cols[7].trim() : '', 
+                                parentName: cols[8] ? cols[8].trim() : '', 
+                                parentTel: cols[9] ? cols[9].trim() : '', 
+                                photoBase64: cols[10] ? cols[10].trim() : '',
+                                recordedDate: cols[11] ? cols[11].trim() : '',
+                                religion: cols[12] ? cols[12].trim() : '',
+                                nationalId: cols[13] ? cols[13].trim() : '',
+                                studentTel: cols[14] ? cols[14].trim() : '',
+                                age: cols[15] ? cols[15].trim() : '',
+                                parentOccupation: cols[16] ? cols[16].trim() : '',
+                                parentWorkplace: cols[17] ? cols[17].trim() : '',
+                                weight: cols[18] ? cols[18].trim() : '',
+                                height: cols[19] ? cols[19].trim() : '',
+                                bmi: cols[20] ? cols[20].trim() : '',
+                                bmiTranslation: cols[21] ? cols[21].trim() : '',
+                                disability: cols[22] ? cols[22].trim() : '',
+                                congenitalDisease: cols[23] ? cols[23].trim() : '',
+                                regularMedicine: cols[24] ? cols[24].trim() : '',
+                                parentRelation: cols[25] ? cols[25].trim() : '',      // Z (25)
+                                fatherName: cols[26] ? cols[26].trim() : '',          // AA (26)
+                                fatherTel: cols[27] ? cols[27].trim() : '',           // AB (27)
+                                fatherOccupation: cols[28] ? cols[28].trim() : '',    // AC (28)
+                                fatherIncome: cols[29] ? cols[29].trim() : '',        // AD (29)
+                                motherName: cols[30] ? cols[30].trim() : '',          // AE (30)
+                                motherTel: cols[31] ? cols[31].trim() : '',           // AF (31)
+                                motherOccupation: cols[32] ? cols[32].trim() : '',    // AG (32)
+                                motherIncome: cols[33] ? cols[33].trim() : '',        // AH (33)
+                                parentsStatus: cols[34] ? cols[34].trim() : '',       // AI (34)
+                                livingWith: cols[35] ? cols[35].trim() : '',          // AJ (35)
+                                parentIncome: cols[36] ? cols[36].trim() : ''         // AK (36)
                             });
                         }
                         return parsedStudents;
