@@ -155,6 +155,47 @@
             }
         };
 
+        // 🚀 --- ระบบสื่อสารกับ API แบบ GET (Fast Load & Chunked Cache) --- 🚀
+        const fetchFastAPI = async (action) => {
+            try {
+                // ส่งคำขอแบบ GET ดึงข้อมูลพร้อมกับ Chunked Cache เพื่อทำลายข้อจำกัดการโหลด
+                const url = `${GAS_URL}?action=${action}&t=${Date.now()}`;
+                const response = await fetch(url, { method: 'GET' });
+                if (!response.ok) throw new Error('Network response was not ok');
+                const rawData = await response.json();
+                
+                const formatDataNames = (obj) => {
+                    if (typeof obj === 'string') {
+                        return obj.replace(/ผู้อำนวยการโรงเรียน/g, 'ผอ.').replace(/ผู้อำนวยการ/g, 'ผอ.').replace(/รองผู้อำนวยการ/g, 'รอง');
+                    } else if (Array.isArray(obj)) {
+                        return obj.map(formatDataNames);
+                    } else if (obj !== null && typeof obj === 'object') {
+                        const newObj = {};
+                        for (let key in obj) { newObj[key] = formatDataNames(obj[key]); }
+                        if (newObj.name) {
+                            let originalName = String(newObj.name).trim();
+                            let cleanName = originalName.replace(/^(นาย|นางสาว|นาง|ด\.ช\.|ด\.ญ\.|ว่าที่\s*ร\.ต\.|ว่าที่ร้อยตรี|ครู|ผู้อำนวยการโรงเรียน|ผู้อำนวยการ|รองผู้อำนวยการ|ผอ\.|รอง)\s*/g, '').trim();
+                            const isExecutive = newObj.role === 'executive' || originalName.includes('ผอ.') || originalName.includes('ผู้อำนวยการ');
+                            const isDeputy = originalName.includes('รอง');
+                            if (isExecutive) {
+                                newObj.name = isDeputy ? `รอง${cleanName}` : `ผอ.${cleanName}`;
+                            } else if (newObj.role === 'user' || newObj.role === 'admin' || newObj.role === 'dept_admin') {
+                                newObj.name = `ครู${cleanName}`;
+                            } else if (originalName.includes('ครู')) {
+                                newObj.name = `ครู${cleanName}`;
+                            }
+                        }
+                        return newObj;
+                    }
+                    return obj;
+                };
+                return formatDataNames(rawData);
+            } catch (error) {
+                console.error("Fast API Request Error:", error);
+                return { status: 'error', message: error.message };
+            }
+        };
+
         // --- ฟังก์ชันคำนวณระยะทาง GPS (Haversine Formula) ---
         const getDistanceFromLatLonInM = (lat1, lon1, lat2, lon2) => {
             const R = 6371e3; // รัศมีโลก เมตร
@@ -202,7 +243,7 @@
         // --- Components ย่อย ---
         
         // 1. หน้าเข้าสู่ระบบ
-        const LoginScreen = ({ onLogin, schoolConfig }) => {
+        const LoginScreen = ({ onLogin, schoolConfig, isInitialLoading = false }) => {
             const [username, setUsername] = useState('');
             const [password, setPassword] = useState('');
             const [showPwd, setShowPwd] = useState(false);
@@ -263,52 +304,71 @@
 
             return (
                 <div className="min-h-screen flex items-center justify-center bg-ns-blue p-4">
-                    <div className="glass-panel p-8 rounded-2xl shadow-2xl w-full max-w-md">
-                        <div className="text-center mb-8">
-                            {schoolConfig && schoolConfig.logo ? (
-                                <img src={schoolConfig.logo} alt="School Logo" className="w-auto h-32 mx-auto mb-4 object-contain drop-shadow-md" />
-                            ) : (
-                                <div className="w-28 h-28 bg-ns-yellow rounded-full mx-auto flex items-center justify-center mb-4 shadow-lg">
-                                    <i className="fa-solid fa-graduation-cap text-5xl text-ns-blue"></i>
+                    <div className="glass-panel p-8 rounded-2xl shadow-2xl w-full max-w-md relative">
+                        {isInitialLoading ? (
+                            <div className="flex flex-col items-center justify-center py-10 animate-[fadeIn_0.5s_ease-out]">
+                                <div className="relative w-36 h-36 mb-6 flex items-center justify-center">
+                                    {/* ไอคอนหมุนรอบๆ */}
+                                    <div className="absolute inset-0 rounded-full border-t-4 border-b-4 border-ns-yellow animate-spin opacity-80"></div>
+                                    <div className="absolute inset-3 rounded-full border-r-4 border-l-4 border-ns-blue animate-[spin_1.5s_linear_infinite_reverse] opacity-60"></div>
+                                    
+                                    {/* ไอคอนอาคารเรียนตรงกลาง (แทนโลโก้ภาพแตก) */}
+                                    <div className="w-full h-full bg-ns-yellow rounded-full flex items-center justify-center shadow-lg relative z-10 scale-75">
+                                        <i className="fa-solid fa-school text-5xl text-ns-blue"></i>
+                                    </div>
                                 </div>
-                            )}
-                            <h1 className="text-2xl font-bold text-ns-blue">NS Student Care (NSC)</h1>
-                            <h1 className="text-gray-900  font-bold text-ns-blue">(สำหรับครูและผู้บริหาร)</h1>
-                            <p className="text-gray-500 text-sm">{schoolConfig && schoolConfig.name}</p>
-                        </div>
-                        <form onSubmit={handleLogin}>
-                            <div className="mb-4">
-                                <label className="block text-sm font-medium text-gray-700 mb-1">ชื่อผู้ใช้</label>
-                                <div className="relative">
-                                    <i className="fa-solid fa-user absolute left-3 top-3 text-gray-400"></i>
-                                    <input type="text" required value={username} onChange={e=>setUsername(e.target.value)} 
-                                        className="w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-ns-blue outline-none" placeholder="Username" />
-                                </div>
+                                <h2 className="text-xl font-bold text-ns-blue mb-2 animate-pulse">กำลังเตรียมความพร้อม</h2>
+                                <p className="text-gray-500 font-medium">กรุณารอสักครู่...</p>
                             </div>
-                            <div className="mb-6">
-                                <label className="block text-sm font-medium text-gray-700 mb-1">รหัสผ่าน</label>
-                                <div className="relative">
-                                    <i className="fa-solid fa-lock absolute left-3 top-3 text-gray-400"></i>
-                                    <input type={showPwd ? "text" : "password"} required value={password} onChange={e=>setPassword(e.target.value)} 
-                                        className="w-full pl-10 pr-10 py-2 border rounded-lg focus:ring-2 focus:ring-ns-blue outline-none" placeholder="Password" />
-                                    <i className={`fa-solid ${showPwd ? 'fa-eye-slash' : 'fa-eye'} absolute right-3 top-3 text-gray-400 cursor-pointer`} 
-                                        onClick={()=>setShowPwd(!showPwd)}></i>
+                        ) : (
+                            <React.Fragment>
+                                <div className="text-center mb-8 animate-[fadeIn_0.5s_ease-out]">
+                                    {schoolConfig && schoolConfig.logo ? (
+                                        <img src={schoolConfig.logo} alt="School Logo" className="w-auto h-32 mx-auto mb-4 object-contain drop-shadow-md" />
+                                    ) : (
+                                        <div className="w-28 h-28 bg-ns-yellow rounded-full mx-auto flex items-center justify-center mb-4 shadow-lg">
+                                            <i className="fa-solid fa-graduation-cap text-5xl text-ns-blue"></i>
+                                        </div>
+                                    )}
+                                    <h1 className="text-2xl font-bold text-ns-blue">NS Student Care (NSC)</h1>
+                                    <h1 className="text-gray-900 font-bold text-ns-blue">(สำหรับครูและผู้บริหาร)</h1>
+                                    <p className="text-gray-500 text-sm mt-1">{schoolConfig && schoolConfig.name}</p>
                                 </div>
-                            </div>
-                            <div className="flex items-center justify-between mb-6">
-                                <div className="flex items-center">
-                                    <input type="checkbox" id="remember" checked={remember} onChange={e=>setRemember(e.target.checked)} className="mr-2 rounded text-ns-blue" />
-                                    <label htmlFor="remember" className="text-sm text-gray-600">จำชื่อผู้ใช้</label>
+                                <form onSubmit={handleLogin} className="animate-[fadeIn_0.5s_ease-out]">
+                                    <div className="mb-4">
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">ชื่อผู้ใช้</label>
+                                        <div className="relative">
+                                            <i className="fa-solid fa-user absolute left-3 top-3 text-gray-400"></i>
+                                            <input type="text" required value={username} onChange={e=>setUsername(e.target.value)} 
+                                                className="w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-ns-blue outline-none" placeholder="Username" />
+                                        </div>
+                                    </div>
+                                    <div className="mb-6">
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">รหัสผ่าน</label>
+                                        <div className="relative">
+                                            <i className="fa-solid fa-lock absolute left-3 top-3 text-gray-400"></i>
+                                            <input type={showPwd ? "text" : "password"} required value={password} onChange={e=>setPassword(e.target.value)} 
+                                                className="w-full pl-10 pr-10 py-2 border rounded-lg focus:ring-2 focus:ring-ns-blue outline-none" placeholder="Password" />
+                                            <i className={`fa-solid ${showPwd ? 'fa-eye-slash' : 'fa-eye'} absolute right-3 top-3 text-gray-400 cursor-pointer`} 
+                                                onClick={()=>setShowPwd(!showPwd)}></i>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center justify-between mb-6">
+                                        <div className="flex items-center">
+                                            <input type="checkbox" id="remember" checked={remember} onChange={e=>setRemember(e.target.checked)} className="mr-2 rounded text-ns-blue" />
+                                            <label htmlFor="remember" className="text-sm text-gray-600">จำชื่อผู้ใช้</label>
+                                        </div>
+                                    </div>
+                                    <button type="submit" disabled={loading} 
+                                        className="w-full bg-ns-blue text-white py-2 rounded-lg hover:bg-blue-800 transition shadow-md font-bold">
+                                        {loading ? <i className="fa-solid fa-spinner fa-spin"></i> : "เข้าสู่ระบบ"}
+                                    </button>
+                                </form>
+                                <div className="mt-6 text-center animate-[fadeIn_0.5s_ease-out]">
+                                    <p className="text-[10px] text-gray-400 font-medium tracking-wider uppercase">Powered by taskeen @narasikkhalai</p>
                                 </div>
-                            </div>
-                            <button type="submit" disabled={loading} 
-                                className="w-full bg-ns-blue text-white py-2 rounded-lg hover:bg-blue-800 transition shadow-md font-bold">
-                                {loading ? <i className="fa-solid fa-spinner fa-spin"></i> : "เข้าสู่ระบบ"}
-                            </button>
-                        </form>
-                        <div className="mt-6 text-center">
-                            <p className="text-[10px] text-gray-400 font-medium tracking-wider uppercase">Powered by taskeen @narasikkhalai</p>
-                        </div>
+                            </React.Fragment>
+                        )}
                     </div>
                 </div>
             );
@@ -3612,23 +3672,23 @@
             // --- ฟังก์ชันสร้าง HTML สำหรับ Print Preview และการ Print จริง ---
             const generatePrintHTML = (stu) => {
                 return `
-                    <div style="font-family: 'Sarabun', sans-serif; font-size: 16pt; color: #333; line-height: 1.5;">
-                        <div style="display: flex; align-items: center; justify-content: flex-start; border-bottom: 2px solid #000; padding-bottom: 15px; margin-bottom: 20px;">
-                            ${schoolConfig && schoolConfig.logo ? `<img src="${schoolConfig.logo}" style="width: 85px; height: 85px; object-fit: contain; margin-right: 25px; display: block;" />` : ''}
-                            <div style="display: flex; flex-direction: column; text-align: left;">
-                                <h2 style="font-size: 22pt; font-weight: bold; margin: 0 0 5px 0; color: #000;">${schoolConfig ? schoolConfig.name : 'โรงเรียนนราสิกขาลัย'}</h2>
-                                <h3 style="font-size: 18pt; font-weight: bold; margin: 0 0 5px 0; color: #000;">ระเบียนประวัติและข้อมูลนักเรียน</h3>
-                                <p style="font-size: 14pt; margin: 0; color: #333;">เอกสารอ้างอิงจากระบบสารสนเทศโรงเรียน</p>
+                    <div style="font-family: 'Sarabun', sans-serif; font-size: var(--dynamic-font-size, 16pt); color: #333; line-height: 1.5;">
+                        <div style="display: flex; align-items: center; border-bottom: 2px solid #003366; padding-bottom: 15px; margin-bottom: 20px;">
+                            ${schoolConfig && schoolConfig.logo ? `<img src="${schoolConfig.logo}" style="width: 5.5em; height: 5.5em; object-fit: contain; margin-right: 1.5em; flex-shrink: 0;" />` : ''}
+                            <div style="text-align: left;">
+                                <h1 style="color: #003366; margin: 0 0 0.2em 0; font-size: 1.4em; font-weight: bold;">${schoolConfig ? schoolConfig.name : 'โรงเรียนนราสิกขาลัย'}</h1>
+                                <h2 style="color: #333; margin: 0 0 0.2em 0; font-size: 1.15em; font-weight: bold;">ระเบียนประวัติและข้อมูลนักเรียน</h2>
+                                <p style="margin: 0; color: #666; font-size: 0.9em;">เอกสารอ้างอิงจากระบบสารสนเทศโรงเรียน</p>
                             </div>
                         </div>
                         
                         <div style="display: flex; gap: 20px; margin-bottom: 20px;">
                             <div style="width: 140px; height: 180px; border: 1px solid #ddd; display: flex; align-items: center; justify-content: center; background-color: #f9f9f9; flex-shrink: 0;">
-                                ${stu.photoBase64 ? `<img src="${stu.photoBase64}" style="width: 100%; height: 100%; object-fit: cover;" />` : `<span style="color:#aaa; font-size: 14pt;">รูปถ่าย</span>`}
+                                ${stu.photoBase64 ? `<img src="${stu.photoBase64}" style="width: 100%; height: 100%; object-fit: cover;" />` : `<span style="color:#aaa; font-size: 0.875em;">รูปถ่าย</span>`}
                             </div>
                             <div style="flex: 1;">
-                                <h2 style="margin: 0 0 10px; color: #003366; font-size: 18pt; font-weight: bold;">${stu.name || '-'}</h2>
-                                <table style="width: 100%; border-collapse: collapse;">
+                                <h2 style="margin: 0 0 10px; color: #003366; font-size: 1.125em; font-weight: bold;">${stu.name || '-'}</h2>
+                                <table style="width: 100%; border-collapse: collapse; font-size: 1em;">
                                     <tr><td style="padding: 5px 0; width: 180px; font-weight: bold;">เลขประจำตัวนักเรียน</td><td>${stu.code || '-'}</td></tr>
                                     <tr><td style="padding: 5px 0; font-weight: bold;">เลขบัตรประชาชน</td><td>${stu.nationalId || '-'}</td></tr>
                                     <tr><td style="padding: 5px 0; font-weight: bold;">ระดับชั้นเรียน</td><td>${stu.classLevel || '-'} ห้อง ${stu.room || '-'}</td></tr>
@@ -3638,8 +3698,8 @@
                             </div>
                         </div>
 
-                        <h3 style="background-color: #f0f4f8; padding: 8px; margin-bottom: 10px; color: #003366; border-left: 4px solid #003366; font-size: 16pt; font-weight: bold;">ส่วนที่ 1: ข้อมูลส่วนตัว</h3>
-                        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+                        <h3 style="background-color: #f0f4f8; padding: 8px; margin-bottom: 10px; color: #003366; border-left: 4px solid #003366; font-size: 1em; font-weight: bold;">ส่วนที่ 1: ข้อมูลส่วนตัว</h3>
+                        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 1em;">
                             <tr>
                                 <td style="padding: 5px 0; width: 160px; font-weight: bold;">วัน/เดือน/ปีเกิด</td><td style="width: 35%;">${stu.dob ? new Date(stu.dob).toLocaleDateString('th-TH', {year: 'numeric', month: 'long', day: 'numeric'}) : '-'}</td>
                                 <td style="padding: 5px 0; width: 140px; font-weight: bold;">อายุ</td><td>${stu.age ? stu.age + ' ปี' : '-'}</td>
@@ -3650,8 +3710,8 @@
                             </tr>
                         </table>
 
-                        <h3 style="background-color: #f0f4f8; padding: 8px; margin-bottom: 10px; color: #003366; border-left: 4px solid #003366; font-size: 16pt; font-weight: bold;">ส่วนที่ 2: ข้อมูลสุขภาพ</h3>
-                        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+                        <h3 style="background-color: #f0f4f8; padding: 8px; margin-bottom: 10px; color: #003366; border-left: 4px solid #003366; font-size: 1em; font-weight: bold;">ส่วนที่ 2: ข้อมูลสุขภาพ</h3>
+                        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 1em;">
                             <tr>
                                 <td style="padding: 5px 0; width: 160px; font-weight: bold;">น้ำหนัก</td><td style="width: 35%;">${stu.weight ? stu.weight + ' กก.' : '-'}</td>
                                 <td style="padding: 5px 0; width: 140px; font-weight: bold;">ส่วนสูง</td><td>${stu.height ? stu.height + ' ซม.' : '-'}</td>
@@ -3671,8 +3731,8 @@
                             </tr>
                         </table>
 
-                        <h3 style="background-color: #f0f4f8; padding: 8px; margin-bottom: 10px; color: #003366; border-left: 4px solid #003366; font-size: 16pt; font-weight: bold;">ส่วนที่ 3: ข้อมูลครอบครัวและผู้ปกครอง</h3>
-                        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+                        <h3 style="background-color: #f0f4f8; padding: 8px; margin-bottom: 10px; color: #003366; border-left: 4px solid #003366; font-size: 1em; font-weight: bold;">ส่วนที่ 3: ข้อมูลครอบครัวและผู้ปกครอง</h3>
+                        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 1em;">
                             <tr>
                                 <td style="padding: 5px 0; width: 160px; font-weight: bold;">ชื่อ-สกุลบิดา</td><td style="width: 35%;">${stu.fatherName || '-'}</td>
                                 <td style="padding: 5px 0; width: 140px; font-weight: bold;">เบอร์โทรบิดา</td><td>${stu.fatherTel || '-'}</td>
@@ -3711,12 +3771,12 @@
                             </tr>
                         </table>
 
-                        <h3 style="background-color: #f0f4f8; padding: 8px; margin-bottom: 10px; color: #003366; border-left: 4px solid #003366; font-size: 16pt; font-weight: bold;">ส่วนที่ 4: ที่อยู่ปัจจุบัน</h3>
-                        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+                        <h3 style="background-color: #f0f4f8; padding: 8px; margin-bottom: 10px; color: #003366; border-left: 4px solid #003366; font-size: 1em; font-weight: bold;">ส่วนที่ 4: ที่อยู่ปัจจุบัน</h3>
+                        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 1em;">
                             <tr><td style="padding: 5px 0; width: 160px; font-weight: bold; vertical-align: top;">ที่อยู่</td><td style="line-height: 1.5;">${stu.address || '-'}</td></tr>
                         </table>
                         
-                        <div style="margin-top: 30px; text-align: right; font-size: 14pt; color: #555;">
+                        <div style="margin-top: 30px; text-align: right; font-size: 0.875em; color: #555;">
                             พิมพ์โดย: ${user ? user.name : 'ผู้ดูแลระบบ'} <br/>
                             วันที่พิมพ์: ${new Date().toLocaleDateString('th-TH', {year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit'})} น.
                         </div>
@@ -3757,7 +3817,7 @@
                                 font-family: 'Sarabun', sans-serif;
                                 background-color: var(--bg-color);
                                 margin: 0;
-                                padding-top: 120px;
+                                padding-top: 140px;
                                 display: flex;
                                 justify-content: center;
                             }
@@ -3879,6 +3939,15 @@
                                     </select>
                                 </div>
                                 <div class="control-group">
+                                    <label style="color: #6ee7b7;"><i class="fa-solid fa-font"></i> ขนาดตัวอักษร:</label>
+                                    <div style="display: flex; align-items: center; gap: 8px; background: white; padding: 4px 10px; border-radius: 6px; border: 1px solid #64748b;">
+                                        <span style="font-size: 12px; color: #64748b; font-weight: bold;">A-</span>
+                                        <input type="range" id="fontSizeSlider" min="10" max="24" value="16" step="1" oninput="updatePrintStyles()" style="width: 80px; cursor: pointer; accent-color: #10b981;">
+                                        <span style="font-size: 16px; color: #64748b; font-weight: bold;">A+</span>
+                                        <span id="fontSizeDisplay" style="color: #0f172a; font-weight: bold; width: 35px; text-align: center; border-left: 1px solid #cbd5e1; padding-left: 8px;">16pt</span>
+                                    </div>
+                                </div>
+                                <div class="control-group">
                                     <label style="color: #fde047;"><i class="fa-solid fa-magnifying-glass-minus"></i> ย่อเนื้อหา (Fit):</label>
                                     <select id="fitToPage" onchange="updatePrintStyles()" style="background-color: #fef08a; border-color: #facc15; font-weight: bold; color: #854d0e;">
                                         <option value="1">100% (พอดี 1 หน้า)</option>
@@ -3907,6 +3976,13 @@
                                 const orientation = document.getElementById('orientation').value;
                                 const margin = document.getElementById('margin').value;
                                 const fitScale = parseFloat(document.getElementById('fitToPage').value);
+                                const fontSize = document.getElementById('fontSizeSlider').value;
+
+                                // อัปเดตตัวเลขแสดงขนาดตัวอักษรบน Toolbar
+                                document.getElementById('fontSizeDisplay').innerText = fontSize + 'pt';
+
+                                // อัปเดตตัวแปร CSS เพื่อให้ข้อความภายใน HTML เปลี่ยนขนาดแบบ Dynamic
+                                document.documentElement.style.setProperty('--dynamic-font-size', fontSize + 'pt');
 
                                 // 1. กำหนด @page และ Scale สำหรับการปริ้นจริง (Physical Print)
                                 let styleEl = document.getElementById('dynamic-print-style');
@@ -4603,8 +4679,6 @@
                             </table>
                         </div>
                     </div>
-
-                    {/* (Modal Print Preview เดิมถูกลบออกและเปลี่ยนเป็นหน้าต่างใหม่แบบสมบูรณ์) */}
 
                     {/* Modal ยืนยันการเลื่อนชั้น */}
                     {promoteModalOpen && (
@@ -13387,6 +13461,7 @@
 
         // --- Main Application ---
         const App = () => {
+            const [isInitialLoading, setIsInitialLoading] = useState(true); // 💡 เพิ่มบรรทัดนี้กลับเข้ามาเพื่อควบคุมหน้า Loading
             const defaultLogo = "https://upload.wikimedia.org/wikipedia/th/a/a2/Narasikkhalai_School_Logo.png";
             const [schoolConfig, setSchoolConfig] = useState(() => {
                 const saved = localStorage.getItem('ns_school_config');
@@ -13711,7 +13786,7 @@
                 setIsSyncing(true);
                 try {
                     const [initialRes, behaviorRecordsRes, activityRecordsRes, forgotCardRecordsRes, leaveRecordsRes, registrationsRes, studentsRes, provRes, directSheetStudentsRes, usersRes, teachersRes, exemptionsRes, msMakeupRes, schedulesRes] = await Promise.allSettled([
-                        callGAS('getInitialData'),
+                        fetchFastAPI('getInitialData'), // 💡 เปลี่ยนมาใช้ fetchFastAPI เพื่อดึงข้อมูลผ่าน Chunked Cache ทะลุขีดจำกัด
                         callGAS('getBehaviorRecords', { targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' }), 
                         callGAS('getActivityRecords', { targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' }), 
                         callGAS('getForgotCardRecords', { targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' }), 
@@ -13862,6 +13937,7 @@
                     console.error("Background sync failed:", error);
                 }
                 setIsSyncing(false);
+                setIsInitialLoading(false); // 💡 สั่งปิดหน้า Loading เมื่อดึงข้อมูลเสร็จทั้งหมดแล้ว
             };
 
             useEffect(() => {
@@ -14082,7 +14158,7 @@
             // eslint-disable-next-line react-hooks/exhaustive-deps
             }, [isSyncing, globalLeaveRecords]); // ให้ระบบเช็คซ้ำทุกครั้งที่มีการดึงข้อมูลเสร็จ หรือเพิ่มการแจ้งลาใหม่
 
-            if (!user) return <LoginScreen onLogin={setUser} schoolConfig={schoolConfig} />;
+            if (!user) return <LoginScreen onLogin={setUser} schoolConfig={schoolConfig} isInitialLoading={isInitialLoading} />;
 
             const userAllowedMenus = rolePermissions[user.role] || [];
             const menus = allMenus.filter(m => userAllowedMenus.includes(m.id));
