@@ -13367,7 +13367,27 @@
 
         // --- Main Application ---
         const App = () => {
-            const [isInitialLoading, setIsInitialLoading] = useState(true); // 💡 เพิ่มบรรทัดนี้กลับเข้ามาเพื่อควบคุมหน้า Loading
+            // 👇 สร้างตัวแปรสำหรับเปิด/ปิดหน้าจอโหลดตอนเริ่มต้น
+            const [isInitialLoading, setIsInitialLoading] = useState(true);
+            
+            // 👇 ฟังก์ชันเปิดหน้าเว็บแบบ Fast Load (ปลดล็อคหน้า Login ทันที)
+            useEffect(() => {
+                const loader = document.getElementById('nsc-fast-loader');
+                if (loader) {
+                    setTimeout(() => {
+                        loader.style.opacity = '0';
+                        setTimeout(() => loader.remove(), 500); 
+                    }, 300); 
+                }
+
+                // 🚀 หัวใจสำคัญ: สั่งปิดวงแหวน Loading ทันทีใน 0.5 วินาที
+                // เพื่อปลดล็อคให้หน้า Login โชว์ขึ้นมาให้ครูพิมพ์รหัสผ่านได้เลย 
+                // ส่วนข้อมูลนักเรียนและรูปภาพนับพัน จะถูกสูบอยู่เบื้องหลังเงียบๆ (Background Fetch)
+                setTimeout(() => {
+                    setIsInitialLoading(false);
+                }, 500);
+            }, []);
+
             const defaultLogo = "https://upload.wikimedia.org/wikipedia/th/a/a2/Narasikkhalai_School_Logo.png";
             const [schoolConfig, setSchoolConfig] = useState(() => {
                 const saved = localStorage.getItem('ns_school_config');
@@ -13843,7 +13863,7 @@
                     console.error("Background sync failed:", error);
                 }
                 setIsSyncing(false);
-                setIsInitialLoading(false); // 💡 สั่งปิดหน้า Loading เมื่อดึงข้อมูลเสร็จทั้งหมดแล้ว
+                // 💡 หน้า Loading ถูกสั่งปิดไปให้แสดงหน้า Login ทันทีตั้งแต่เริ่มเว็บแล้ว ข้อมูลจะโหลดเงียบๆ เบื้องหลัง
             };
 
             useEffect(() => {
