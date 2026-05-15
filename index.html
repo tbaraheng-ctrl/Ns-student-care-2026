@@ -5965,6 +5965,9 @@
                         uniqueRooms.push(s.room);
                     }
                 });
+                
+                // เพิ่มการเรียงลำดับชั้น/ห้องจากน้อยไปมาก (Natural Sort รองรับหลักสิบเช่น ม.1/10)
+                uniqueRooms.sort((a, b) => String(a).localeCompare(String(b), 'th', { numeric: true }));
             }
 
             let classStudents = [];
@@ -6528,7 +6531,7 @@
                 </div>
             );
         };
-
+        
 // 14. หน้าเช็คชื่อเข้าเรียน (AttendanceView)
         const AttendanceView = ({ user, students, leaveRecords, setLeaveRecords, periodSettings, behaviorsSetting, behaviorRecords, setBehaviorRecords, registrations, allSchedules, teachers = [], schoolConfig }) => {
             const React = window.React || require('react');
