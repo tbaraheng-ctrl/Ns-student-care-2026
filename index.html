@@ -6531,7 +6531,7 @@
                 </div>
             );
         };
-        
+
 // 14. หน้าเช็คชื่อเข้าเรียน (AttendanceView)
         const AttendanceView = ({ user, students, leaveRecords, setLeaveRecords, periodSettings, behaviorsSetting, behaviorRecords, setBehaviorRecords, registrations, allSchedules, teachers = [], schoolConfig }) => {
             const React = window.React || require('react');
@@ -6571,6 +6571,7 @@
             const [reportTeacher, setReportTeacher] = useState('');
             const [reportStatusFilter, setReportStatusFilter] = useState('all');
             const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+            const [reportDataType, setReportDataType] = useState('subject'); // เพิ่ม State สำหรับแยกประเภทรายงาน (รายวิชา / คาบ 0)
 
             useEffect(() => {
                 setReportDate(currentDate);
@@ -7410,6 +7411,15 @@
 
                     combinedSchedules.forEach(row => {
                         const parsed = parseScheduleRow(row);
+                        
+                        // กรองข้อมูลตามประเภทรายงานที่เลือก (รายวิชา หรือ คาบ 0)
+                        const sSubCheck = String(parsed.subjectCode || '').replace(/[^ก-๙a-zA-Z0-9]/g, '').toUpperCase();
+                        const sPerCheck = String(parsed.period || '').trim();
+                        const isHomeroom = sSubCheck === 'HR000' || sPerCheck === '0' || sPerCheck === 'คาบ 0' || sPerCheck === 'โฮมรูม';
+                        
+                        if (reportDataType === 'homeroom' && !isHomeroom) return;
+                        if (reportDataType === 'subject' && isHomeroom) return;
+
                         if (parsed.day === dayNameTH) {
                             const tNameNorm = normalizeName(parsed.teacherName);
                             const teacherObj = (teachers || []).find(t => normalizeName(t.name) === tNameNorm);
@@ -7588,7 +7598,7 @@
                                             <td class="td-center">${sub.subjectCode}</td>
                                             <td>${sub.subjectName}</td>
                                             <td class="td-center">${sub.room}</td>
-                                            <td class="td-center" style="color: ${titleColor} !important; font-weight: bold;">${statusText}</td>
+                                            <td class="td-center" style="color: ${sub.color ? sub.color : titleColor} !important; font-weight: bold;">${sub.status ? sub.status : statusText}</td>
                                         </tr>`;
                                     });
                                 });
@@ -7598,11 +7608,22 @@
                         return html;
                     };
 
-                    if (reportStatusFilter === 'all' || reportStatusFilter === 'checked') {
-                        htmlContent += renderTable(checkedGrouped, '✅ รายงานการเช็คชื่อเข้าเรียนของครูผู้สอน (รายวิชาที่มีการเช็คชื่อแล้ว)', 'ไม่มีรายวิชาที่มีการเช็คชื่อในวันนี้', '#16a34a', 'เช็คชื่อแล้ว');
-                    }
-                    if (reportStatusFilter === 'all' || reportStatusFilter === 'unchecked') {
-                        htmlContent += renderTable(uncheckedGrouped, '❌ รายวิชาที่ไม่มีการเช็คชื่อเข้าเรียนประจำวัน', 'ทุกรายวิชาได้รับการเช็คชื่อเรียบร้อยแล้ว', '#dc2626', 'ยังไม่เช็คชื่อ');
+                    if (reportDataType === 'homeroom') {
+                        // กรณีเลือกรายงานคาบ 0 ให้แสดงรวมกันในตารางเดียว (ฟอร์มเดียว)
+                        const combinedHomerooms = [
+                            ...checkedClasses.map(c => ({...c, status: '✅ เช็คชื่อแล้ว', color: '#16a34a'})),
+                            ...uncheckedClasses.map(c => ({...c, status: '❌ ยังไม่เช็คชื่อ', color: '#dc2626'}))
+                        ];
+                        const groupedHomerooms = groupClasses(combinedHomerooms);
+                        htmlContent += renderTable(groupedHomerooms, 'รายงานการเช็คชื่อ คาบ 0 (กิจกรรมหน้าเสาธง/โฮมรูม)', 'ไม่มีข้อมูลกิจกรรมหน้าเสาธง/โฮมรูม ในวันนี้', '#4f46e5', '');
+                    } else {
+                        // กรณีเลือกระยะวิชา ให้แสดงตามฟิลเตอร์เดิม
+                        if (reportStatusFilter === 'all' || reportStatusFilter === 'checked') {
+                            htmlContent += renderTable(checkedGrouped, '✅ รายงานการเช็คชื่อเข้าเรียนของครูผู้สอน (รายวิชาที่มีการเช็คชื่อแล้ว)', 'ไม่มีรายวิชาที่มีการเช็คชื่อในวันนี้', '#16a34a', 'เช็คชื่อแล้ว');
+                        }
+                        if (reportStatusFilter === 'all' || reportStatusFilter === 'unchecked') {
+                            htmlContent += renderTable(uncheckedGrouped, '❌ รายวิชาที่ไม่มีการเช็คชื่อเข้าเรียนประจำวัน', 'ทุกรายวิชาได้รับการเช็คชื่อเรียบร้อยแล้ว', '#dc2626', 'ยังไม่เช็คชื่อ');
+                        }
                     }
 
                     htmlContent += `</div></body></html>`;
@@ -7873,6 +7894,19 @@
                                 
                                 <div className="space-y-4">
                                     <div>
+                                        <label className="block text-sm font-bold text-gray-700 mb-2">ข้อมูลที่ต้องการรายงาน</label>
+                                        <div className="flex gap-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                                            <label className="flex items-center gap-2 cursor-pointer">
+                                                <input type="radio" name="reportDataType" value="subject" checked={reportDataType === 'subject'} onChange={(e) => setReportDataType(e.target.value)} className="w-4 h-4 text-indigo-600 focus:ring-indigo-500" />
+                                                <span className="text-sm font-medium text-gray-800">รายวิชา</span>
+                                            </label>
+                                            <label className="flex items-center gap-2 cursor-pointer">
+                                                <input type="radio" name="reportDataType" value="homeroom" checked={reportDataType === 'homeroom'} onChange={(e) => setReportDataType(e.target.value)} className="w-4 h-4 text-indigo-600 focus:ring-indigo-500" />
+                                                <span className="text-sm font-medium text-gray-800">คาบ 0 (หน้าเสาธง/โฮมรูม)</span>
+                                            </label>
+                                        </div>
+                                    </div>
+                                    <div>
                                         <label className="block text-sm font-bold text-gray-700 mb-1">วันที่เช็คชื่อ</label>
                                         <input 
                                             type="date" 
@@ -7881,18 +7915,20 @@
                                             className="w-full border-2 border-indigo-200 rounded-lg p-2 focus:ring-2 focus:ring-indigo-500 outline-none" 
                                         />
                                     </div>
-                                    <div>
-                                        <label className="block text-sm font-bold text-gray-700 mb-1">ประเภทรายงาน</label>
-                                        <select 
-                                            value={reportStatusFilter} 
-                                            onChange={(e) => setReportStatusFilter(e.target.value)} 
-                                            className="w-full border-2 border-indigo-200 rounded-lg p-2 focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
-                                        >
-                                            <option value="all">ทั้งหมด</option>
-                                            <option value="checked">รายวิชาที่มีการเช็คชื่อแล้ว</option>
-                                            <option value="unchecked">รายวิชาที่ยังไม่ได้เช็คชื่อ</option>
-                                        </select>
-                                    </div>
+                                    {reportDataType === 'subject' && (
+                                        <div>
+                                            <label className="block text-sm font-bold text-gray-700 mb-1">ประเภทรายงาน</label>
+                                            <select 
+                                                value={reportStatusFilter} 
+                                                onChange={(e) => setReportStatusFilter(e.target.value)} 
+                                                className="w-full border-2 border-indigo-200 rounded-lg p-2 focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
+                                            >
+                                                <option value="all">ทั้งหมด</option>
+                                                <option value="checked">รายวิชาที่มีการเช็คชื่อแล้ว</option>
+                                                <option value="unchecked">รายวิชาที่ยังไม่ได้เช็คชื่อ</option>
+                                            </select>
+                                        </div>
+                                    )}
                                     <div>
                                         <label className="block text-sm font-bold text-gray-700 mb-1">กลุ่มสาระการเรียนรู้</label>
                                         <select 
