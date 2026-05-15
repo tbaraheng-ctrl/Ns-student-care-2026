@@ -407,6 +407,10 @@
             const [lateInfo, setLateInfo] = useState(null);
             const [exemptInfo, setExemptInfo] = useState(null);
             
+            // --- เพิ่ม State สำหรับกรอกรหัสด้วยมือ ---
+            const [manualInput, setManualInput] = useState('');
+            const [previewStudent, setPreviewStudent] = useState(null);
+            
             const [now, setNow] = useState(new Date());
 
             useEffect(() => {
@@ -441,6 +445,7 @@
             const latestStudentList = useRef(studentList);
             const latestTimeSettings = useRef(timeSettings);
             const latestBehaviors = useRef(behaviorsSetting || []);
+            const isProcessingRef = useRef(false); // ใช้ useRef แทนตัวแปร Local เพื่อให้ทำงานร่วมกับกรอกมือได้
             
             useEffect(() => { latestRecords.current = records; }, [records]);
             useEffect(() => { latestStudentList.current = studentList; }, [studentList]);
@@ -461,12 +466,11 @@
             const { isOutMode, isLate } = determineModeAndLate(timeStr, timeSettings.startIn, timeSettings.lateTime, timeSettings.startOut);
             const modeName = isOutMode ? "บันทึกออกโรงเรียน" : "บันทึกเข้าโรงเรียน";
 
-            useEffect(() => {
-                const scanner = new Html5Qrcode("reader");
-                const config = { fps: 10, qrbox: { width: 250, height: 250 } };
+            // 👇 ฟังก์ชันหลักในการบันทึกข้อมูล (ใช้ร่วมกันทั้งกล้องสแกน และ กรอกรหัสด้วยมือ) 👇
+            const processScanData = async (decodedText) => {
+                if (isProcessingRef.current) return; 
+                
                 let isGpsValid = false;
-                let isProcessingQR = false;
-
                 if (currentGps) {
                     const dist = getDistanceFromLatLonInM(
                         currentGps.lat, currentGps.lng,
@@ -474,6 +478,178 @@
                     );
                     if (dist <= 200) {
                         isGpsValid = true;
+                    }
+                }
+
+                if(!isGpsValid) {
+                    alert("ไม่สามารถบันทึกได้ เนื่องจากคุณอยู่นอกพื้นที่โรงเรียน");
+                    return;
+                }
+
+                isProcessingRef.current = true;
+                setStatus("กำลังตรวจสอบข้อมูล...");
+
+                const scanNow = new Date();
+                const scanTimeStr = `${String(scanNow.getHours()).padStart(2, '0')}:${String(scanNow.getMinutes()).padStart(2, '0')}`;
+                const scanDateStr = `${String(scanNow.getDate()).padStart(2, '0')}/${String(scanNow.getMonth() + 1).padStart(2, '0')}/${scanNow.getFullYear() + 543}`;
+                
+                const { isOutMode: scanIsOutMode, isLate: scanIsLate } = determineModeAndLate(scanTimeStr, latestTimeSettings.current.startIn, latestTimeSettings.current.lateTime, latestTimeSettings.current.startOut);
+                const currentType = scanIsOutMode ? "ออก" : "เข้า";
+
+                const decodedClean = String(decodedText).trim();
+                const studentInfo = latestStudentList.current.find(s => s.code && String(s.code).trim() === decodedClean);
+                
+                if (!studentInfo) {
+                    setStatus("ไม่พบข้อมูลนักเรียนในระบบ");
+                    setTimeout(() => { setStatus("พร้อมสแกนคิวอาร์โค้ด"); isProcessingRef.current = false; }, 2000);
+                    return;
+                }
+
+                const safeFormatDate = (dateStr) => {
+                    if (!dateStr) return '';
+                    let str = String(dateStr).trim();
+                    if (str.includes('T') || str.match(/^\d{4}-\d{2}-\d{2}/)) {
+                        try {
+                            const d = new Date(str);
+                            if (!isNaN(d.getTime())) return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear() < 2500 ? d.getFullYear() + 543 : d.getFullYear()}`;
+                        } catch(e) {}
+                    }
+                    if (str.includes('/')) {
+                        const parts = str.split('/');
+                        if (parts.length === 3) {
+                            let y = Number(parts[2]);
+                            if (y < 2500 && y > 1900) y += 543;
+                            return `${parts[0].padStart(2, '0')}/${parts[1].padStart(2, '0')}/${y}`;
+                        }
+                    }
+                    return str;
+                };
+
+                const isDuplicate = latestRecords.current.some(r => 
+                    String(r.studentId).trim() === decodedClean && 
+                    safeFormatDate(r.date) === scanDateStr && 
+                    r.type === currentType
+                );
+
+                if (isDuplicate) {
+                    setDuplicateError("คุณได้สแกนบันทึกเข้าหรือออกแล้วก่อนหน้านี้");
+                    setStatus("ข้อมูลซ้ำ");
+                    setTimeout(() => { setDuplicateError(null); setStatus("พร้อมสแกนคิวอาร์โค้ด"); isProcessingRef.current = false; }, 2000);
+                    return;
+                }
+                
+                try {
+                    setTimeout(() => {
+                        const studentExemption = (exemptions || []).find(ex => String(ex.studentId).trim() === decodedClean);
+                        let isExempted = false;
+                        if (studentExemption && scanIsLate && currentType === "เข้า") {
+                            isExempted = true; 
+                            if (studentExemption.allowedLateTime && scanTimeStr > studentExemption.allowedLateTime) {
+                                isExempted = false; 
+                            }
+                        }
+                        const finalStatusStr = isExempted ? "ยกเว้นสาย" : (scanIsLate ? "สาย" : "ปกติ");
+
+                        const newRecord = {
+                            id: Date.now(),
+                            date: scanDateStr,
+                            studentId: decodedClean,
+                            name: studentInfo.name,
+                            room: `${studentInfo.classLevel}/${studentInfo.room}`,
+                            time: scanTimeStr,
+                            statusStr: finalStatusStr,
+                            type: currentType,
+                            recorder: user ? user.name : 'ระบบอัตโนมัติ'
+                        };
+                        
+                        setScanResult(newRecord);
+                        setStatus("บันทึกสำเร็จ");
+
+                        if (isExempted) {
+                            setExemptInfo(studentExemption);
+                        } else if (scanIsLate && currentType === "เข้า") {
+                            const pastLates = latestRecords.current.filter(r => String(r.studentId).trim() === decodedClean && String(r.type).trim() === 'เข้า' && String(r.statusStr).trim() === 'สาย');
+                            const lateCount = pastLates.length + 1; 
+                            
+                            let searchKeyword = `ครั้งที่ ${lateCount}`;
+                            if (lateCount > 3) {
+                                searchKeyword = "เกิน 3 ครั้ง";
+                            }
+
+                            let lateBehavior = latestBehaviors.current.find(b => b.name.includes('สาย') && b.name.includes(searchKeyword));
+                            
+                            if (!lateBehavior) {
+                                let defaultScore = -5;
+                                if (lateCount === 2) defaultScore = -10;
+                                if (lateCount === 3) defaultScore = -15;
+                                if (lateCount > 3) defaultScore = -20;
+                                
+                                lateBehavior = latestBehaviors.current.find(b => b.name.includes('สาย') && !b.name.includes('ครั้ง')) || 
+                                               { name: 'มาโรงเรียนสาย', score: defaultScore, type: 'ลบ' };
+                            }
+
+                            const deductScore = -Math.abs(Number(lateBehavior.score));
+                            const finalBehaviorName = lateBehavior.name.includes(searchKeyword) ? lateBehavior.name : `${lateBehavior.name} (${searchKeyword})`;
+
+                            const newBehaviorRecord = {
+                                id: Date.now() + 1,
+                                date: scanDateStr,
+                                studentId: decodedClean,
+                                name: studentInfo.name,
+                                room: `${studentInfo.classLevel}/${studentInfo.room}`,
+                                behaviorName: finalBehaviorName,
+                                score: deductScore,
+                                recorder: (user && user.name) || 'ระบบอัตโนมัติ',
+                                type: 'ลบ'
+                            };
+
+                            callGAS('saveBehaviorRecord', { ...newBehaviorRecord, targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' })
+                                .catch(e => console.log("Auto behavior error:", e));
+                            
+                            if (setBehaviorRecords) {
+                                setBehaviorRecords(prev => [newBehaviorRecord, ...(prev || [])]);
+                            }
+                            
+                            setLateInfo({ count: lateCount, score: deductScore, label: searchKeyword });
+                        } else {
+                            setLateInfo(null);
+                        }
+                        
+                        latestRecords.current = [newRecord, ...latestRecords.current];
+                        onRecordSaved(newRecord);
+
+                        setTimeout(() => { setScanResult(null); setLateInfo(null); setExemptInfo(null); setStatus("พร้อมสแกนคิวอาร์โค้ด"); isProcessingRef.current = false; }, 3000);
+                    }, 300);
+                } catch(err) {
+                    setStatus("เกิดข้อผิดพลาดในการบันทึก");
+                    setTimeout(() => { setStatus("พร้อมสแกนคิวอาร์โค้ด"); isProcessingRef.current = false; }, 2000);
+                }
+            };
+
+            // 👇 ฟังก์ชันตรวจสอบรหัสจากฟอร์มกรอกมือ 👇
+            const handleManualCheck = () => {
+                const code = manualInput.trim();
+                if (!code) return;
+                
+                const studentInfo = studentList.find(s => s.code && String(s.code).trim() === code);
+                if (studentInfo) {
+                    setPreviewStudent(studentInfo);
+                } else {
+                    setPreviewStudent(null);
+                    alert(`ไม่พบข้อมูลนักเรียนรหัส ${code} ในระบบ`);
+                }
+            };
+
+            useEffect(() => {
+                const scanner = new Html5Qrcode("reader");
+                const config = { fps: 10, qrbox: { width: 250, height: 250 } };
+                
+                if (currentGps) {
+                    const dist = getDistanceFromLatLonInM(
+                        currentGps.lat, currentGps.lng,
+                        parseFloat(latestTimeSettings.current.gpsLat), parseFloat(latestTimeSettings.current.gpsLng)
+                    );
+                    if (dist <= 200) {
                         setStatus("พร้อมสแกนคิวอาร์โค้ด");
                     } else {
                         setStatus(`คุณอยู่นอกพื้นที่โรงเรียน (ระยะห่าง ${Math.round(dist)} เมตร)`);
@@ -481,129 +657,7 @@
                 }
 
                 scanner.start({ facingMode: "environment" }, config, 
-                    async (decodedText) => {
-                        if (isProcessingQR) return; 
-                        
-                        if(!isGpsValid) {
-                            alert("ไม่สามารถบันทึกได้ เนื่องจากคุณอยู่นอกพื้นที่โรงเรียน");
-                            return;
-                        }
-
-                        isProcessingQR = true;
-                        setStatus("กำลังตรวจสอบข้อมูล...");
-
-                        const scanNow = new Date();
-                        const scanTimeStr = `${String(scanNow.getHours()).padStart(2, '0')}:${String(scanNow.getMinutes()).padStart(2, '0')}`;
-                        const scanDateStr = `${String(scanNow.getDate()).padStart(2, '0')}/${String(scanNow.getMonth() + 1).padStart(2, '0')}/${scanNow.getFullYear() + 543}`;
-                        
-                        const { isOutMode: scanIsOutMode, isLate: scanIsLate } = determineModeAndLate(scanTimeStr, latestTimeSettings.current.startIn, latestTimeSettings.current.lateTime, latestTimeSettings.current.startOut);
-                        const currentType = scanIsOutMode ? "ออก" : "เข้า";
-
-                        const decodedClean = String(decodedText).trim();
-                        const studentInfo = latestStudentList.current.find(s => s.code && String(s.code).trim() === decodedClean);
-                        
-                        if (!studentInfo) {
-                            setStatus("ไม่พบข้อมูลนักเรียนในระบบ");
-                            setTimeout(() => { setStatus("พร้อมสแกนคิวอาร์โค้ด"); isProcessingQR = false; }, 2000);
-                            return;
-                        }
-
-                        const isDuplicate = latestRecords.current.some(r => String(r.studentId).trim() === decodedClean && r.date === scanDateStr && r.type === currentType);
-                        if (isDuplicate) {
-                            setDuplicateError("คุณได้สแกนบันทึกเข้าหรือออกแล้วก่อนหน้านี้");
-                            setStatus("ข้อมูลซ้ำ");
-                            setTimeout(() => { setDuplicateError(null); setStatus("พร้อมสแกนคิวอาร์โค้ด"); isProcessingQR = false; }, 2000);
-                            return;
-                        }
-                        
-                        try {
-                            setTimeout(() => {
-                                const studentExemption = (exemptions || []).find(ex => String(ex.studentId).trim() === decodedClean);
-                                let isExempted = false;
-                                if (studentExemption && scanIsLate && currentType === "เข้า") {
-                                    isExempted = true; // ให้ยกเว้นไว้ก่อน
-                                    // แต่ถ้ามีกำหนดเวลา และเวลาที่สแกน "เกิน" เวลาที่อนุญาต ถือว่าสายตามปกติ
-                                    if (studentExemption.allowedLateTime && scanTimeStr > studentExemption.allowedLateTime) {
-                                        isExempted = false; 
-                                    }
-                                }
-                                const finalStatusStr = isExempted ? "ยกเว้นสาย" : (scanIsLate ? "สาย" : "ปกติ");
-
-                                const newRecord = {
-                                    id: Date.now(),
-                                    date: scanDateStr,
-                                    studentId: decodedClean,
-                                    name: studentInfo.name,
-                                    room: `${studentInfo.classLevel}/${studentInfo.room}`,
-                                    time: scanTimeStr,
-                                    statusStr: finalStatusStr,
-                                    type: currentType,
-                                    recorder: user ? user.name : 'ระบบอัตโนมัติ'
-                                };
-                                
-                                setScanResult(newRecord);
-                                setStatus("บันทึกสำเร็จ");
-
-                                if (isExempted) {
-                                    setExemptInfo(studentExemption);
-                                } else if (scanIsLate && currentType === "เข้า") {
-                                    const pastLates = latestRecords.current.filter(r => String(r.studentId).trim() === decodedClean && String(r.type).trim() === 'เข้า' && String(r.statusStr).trim() === 'สาย');
-                                    const lateCount = pastLates.length + 1; 
-                                    
-                                    let searchKeyword = `ครั้งที่ ${lateCount}`;
-                                    if (lateCount > 3) {
-                                        searchKeyword = "เกิน 3 ครั้ง";
-                                    }
-
-                                    let lateBehavior = latestBehaviors.current.find(b => b.name.includes('สาย') && b.name.includes(searchKeyword));
-                                    
-                                    if (!lateBehavior) {
-                                        let defaultScore = -5;
-                                        if (lateCount === 2) defaultScore = -10;
-                                        if (lateCount === 3) defaultScore = -15;
-                                        if (lateCount > 3) defaultScore = -20;
-                                        
-                                        lateBehavior = latestBehaviors.current.find(b => b.name.includes('สาย') && !b.name.includes('ครั้ง')) || 
-                                                       { name: 'มาโรงเรียนสาย', score: defaultScore, type: 'ลบ' };
-                                    }
-
-                                    const deductScore = -Math.abs(Number(lateBehavior.score));
-                                    const finalBehaviorName = lateBehavior.name.includes(searchKeyword) ? lateBehavior.name : `${lateBehavior.name} (${searchKeyword})`;
-
-                                    const newBehaviorRecord = {
-                                        id: Date.now() + 1,
-                                        date: scanDateStr,
-                                        studentId: decodedClean,
-                                        name: studentInfo.name,
-                                        room: `${studentInfo.classLevel}/${studentInfo.room}`,
-                                        behaviorName: finalBehaviorName,
-                                        score: deductScore,
-                                        recorder: (user && user.name) || 'ระบบอัตโนมัติ',
-                                        type: 'ลบ'
-                                    };
-
-                                    callGAS('saveBehaviorRecord', { ...newBehaviorRecord, targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' })
-                                        .catch(e => console.log("Auto behavior error:", e));
-                                    
-                                    if (setBehaviorRecords) {
-                                        setBehaviorRecords(prev => [newBehaviorRecord, ...(prev || [])]);
-                                    }
-                                    
-                                    setLateInfo({ count: lateCount, score: deductScore, label: searchKeyword });
-                                } else {
-                                    setLateInfo(null);
-                                }
-                                
-                                latestRecords.current = [newRecord, ...latestRecords.current];
-                                onRecordSaved(newRecord);
-
-                                setTimeout(() => { setScanResult(null); setLateInfo(null); setExemptInfo(null); setStatus("พร้อมสแกนคิวอาร์โค้ด"); isProcessingQR = false; }, 3000);
-                            }, 300);
-                        } catch(err) {
-                            setStatus("เกิดข้อผิดพลาดในการบันทึก");
-                            setTimeout(() => { setStatus("พร้อมสแกนคิวอาร์โค้ด"); isProcessingQR = false; }, 2000);
-                        }
-                    },
+                    (decodedText) => processScanData(decodedText),
                     (err) => {}
                 ).catch(err => setStatus("ไม่สามารถเปิดกล้องได้"));
 
@@ -638,11 +692,48 @@
                         <div className="text-gray-300 mt-1">{dateStr} | {modeName}</div>
                     </div>
                     
-                    <div className="flex-1 flex flex-col items-center justify-center relative p-4">
+                    <div className="flex-1 flex flex-col items-center justify-center relative p-4 overflow-y-auto">
+                        {/* กรอบแสดงภาพจากกล้อง */}
                         <div id="reader" className="w-full max-w-md bg-black rounded-2xl overflow-hidden border-4 border-ns-blue shadow-2xl flex items-center justify-center"></div>
-                        <div className="mt-6 px-6 py-2 bg-black/70 text-white rounded-full backdrop-blur-sm shadow-md animate-pulse z-20">
+                        <div className="mt-4 px-6 py-2 bg-black/70 text-white rounded-full backdrop-blur-sm shadow-md animate-pulse z-20 mb-4">
                             <i className="fa-solid fa-location-dot mr-2 text-red-400"></i> {status}
                         </div>
+
+                        {/* 👇 ฟอร์มกรอกรหัสด้วยมือ (กรณีสแกนไม่ติด) 👇 */}
+                        <div className="w-full max-w-md bg-gray-800/90 backdrop-blur-md p-4 rounded-xl border border-gray-600 shadow-xl z-20">
+                            <h3 className="text-ns-yellow font-bold mb-2 text-sm"><i className="fa-solid fa-keyboard mr-2"></i>กรอกรหัสประจำตัว (กรณีไม่สแกน QR)</h3>
+                            <div className="flex gap-2">
+                                <input 
+                                    type="text" 
+                                    value={manualInput} 
+                                    onChange={e => {
+                                        setManualInput(e.target.value);
+                                        setPreviewStudent(null);
+                                    }}
+                                    onKeyDown={e => e.key === 'Enter' && handleManualCheck()}
+                                    placeholder="ระบุรหัสประจำตัว..." 
+                                    className="flex-1 px-3 py-2 rounded-lg bg-gray-700 text-white border border-gray-500 focus:border-ns-yellow outline-none font-mono"
+                                />
+                                <button onClick={handleManualCheck} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg font-bold transition shadow">ตรวจสอบ</button>
+                            </div>
+                            
+                            {previewStudent && (
+                                <div className="mt-3 p-3 bg-white rounded-lg border-l-4 border-ns-blue flex justify-between items-center animate-[fadeIn_0.2s_ease-out]">
+                                    <div className="text-left">
+                                        <p className="text-ns-blue font-bold text-lg">{previewStudent.name}</p>
+                                        <p className="text-gray-600 text-xs mt-1">รหัส: <span className="font-bold text-gray-800">{previewStudent.code}</span> | ชั้น: <span className="font-bold text-gray-800">{previewStudent.classLevel}/{previewStudent.room}</span></p>
+                                    </div>
+                                    <button onClick={() => {
+                                        processScanData(previewStudent.code);
+                                        setManualInput('');
+                                        setPreviewStudent(null);
+                                    }} className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-lg font-bold shadow-md transition ml-2 whitespace-nowrap">
+                                        ยืนยันบันทึก
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                        {/* 👆 --------------------------------- 👆 */}
                     </div>
                     
                     {scanResult && (
