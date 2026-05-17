@@ -64,24 +64,26 @@
 
         // --- ตั้งค่าระบบ (Configurations) ---
         // 👇 นำลิงก์ Web App อันใหม่ล่าสุดมาวางทับลิงก์เดิมในเครื่องหมายคำพูดด้านล่างนี้ 👇
-        const GAS_URL = "https://script.google.com/macros/s/AKfycbwW6yfFIO_wYqFZ8J55EAIBM6_OH2SjxMgDea1FYayuedNZxXeHCgXoeMzp0JWkJ0m_/exec";
+        const GAS_URL = "https://script.google.com/macros/s/AKfycbwNbh3ZISvl6N-g0ApsTChBKP1WLQEkEjNUtFRejScZW7MWnfC7LupQIueR4ZMBJB2VQQ/exec";
         
-        // --- ระบบสื่อสารกับ Google App Script (เปลี่ยนเป็น POST แบบฟอร์มมาตรฐาน) ---
+        // --- ระบบสื่อสารกับ Google App Script ---
         const callGAS = async (action, payload) => {
-            const formBody = new URLSearchParams();
-            formBody.append('action', action);
-            if (payload) {
-                // 👇 แนบสถานะสวิตช์ Line Notify ปัจจุบัน ส่งตรงไปบังคับหลังบ้านทุกครั้ง 👇
-                try {
-                    const savedLineSettings = localStorage.getItem('ns_line_notify');
-                    if (savedLineSettings) {
-                        payload.clientLineSettings = JSON.parse(savedLineSettings);
-                    }
-                } catch(e) {}
-                // 👆 ------------------------------------------------------- 👆
-                
-                formBody.append('payload', JSON.stringify(payload));
-            }
+            // [แก้ไข]: จัดการแพ็คข้อมูลให้เป็นรูปแบบ JSON โดยตรง เพื่อให้ตรงกับที่ระบบหลังบ้านรอรับ
+            let finalPayload = typeof payload === 'object' && !Array.isArray(payload) && payload !== null ? { ...payload } : (payload || {});
+            
+            // 👇 แนบสถานะสวิตช์ Line Notify ปัจจุบัน ส่งตรงไปบังคับหลังบ้านทุกครั้ง 👇
+            try {
+                const savedLineSettings = localStorage.getItem('ns_line_notify');
+                if (savedLineSettings) {
+                    finalPayload.clientLineSettings = JSON.parse(savedLineSettings);
+                }
+            } catch(e) {}
+            // 👆 ------------------------------------------------------- 👆
+            
+            const requestData = {
+                action: action,
+                payload: finalPayload
+            };
 
             // ฟังก์ชันแปลงคำนำหน้าชื่อ ผู้อำนวยการ -> ผอ. และ รองผู้อำนวยการ -> รอง แบบอัตโนมัติ (ดักจับเข้มงวดขึ้น)
             const formatDataNames = (obj) => {
@@ -125,10 +127,8 @@
             try {
                 const response = await fetch(GAS_URL, {
                     method: 'POST',
-                    body: formBody,
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded'
-                    }
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // ใช้รูปแบบนี้เพื่อหลีกเลี่ยงปัญหา CORS
+                    body: JSON.stringify(requestData)
                 });
                 
                 const rawData = await response.json();
@@ -141,7 +141,6 @@
                 }
             } catch (error) {
                 console.error("GAS Request Error:", error);
-                // จัดการข้อผิดพลาด Failed to fetch ให้แจ้งเตือนสาเหตุที่ชัดเจน
                 if (error.message.includes('Failed to fetch') || error.name === 'TypeError') {
                     throw new Error(
                         'ไม่สามารถเชื่อมต่อฐานข้อมูลได้ (Failed to fetch)\n\n' +
@@ -172,14 +171,16 @@
                     } else if (obj !== null && typeof obj === 'object') {
                         const newObj = {};
                         for (let key in obj) { newObj[key] = formatDataNames(obj[key]); }
-                        if (newObj.name) {
+                        
+                        // บังคับเปลี่ยนคำนำหน้าชื่อ หากมีคีย์ name (แก้ไขป้องกันไปเติมคำว่าครูในรายการพฤติกรรม/กิจกรรม)
+                        if (newObj.name && newObj.score === undefined && newObj.type !== 'บวก' && newObj.type !== 'ลบ' && newObj.totalDays === undefined && newObj.capacity === undefined) {
                             let originalName = String(newObj.name).trim();
                             let cleanName = originalName.replace(/^(นาย|นางสาว|นาง|ด\.ช\.|ด\.ญ\.|ว่าที่\s*ร\.ต\.|ว่าที่ร้อยตรี|ครู|ผู้อำนวยการโรงเรียน|ผู้อำนวยการ|รองผู้อำนวยการ|ผอ\.|รอง)\s*/g, '').trim();
                             const isExecutive = newObj.role === 'executive' || originalName.includes('ผอ.') || originalName.includes('ผู้อำนวยการ');
                             const isDeputy = originalName.includes('รอง');
                             if (isExecutive) {
                                 newObj.name = isDeputy ? `รอง${cleanName}` : `ผอ.${cleanName}`;
-                            } else if (newObj.role === 'user' || newObj.role === 'admin' || newObj.role === 'dept_admin') {
+                            } else if (newObj.role === 'user' || newObj.role === 'admin' || newObj.role === 'dept_admin' || newObj.role === 'administrative') {
                                 newObj.name = `ครู${cleanName}`;
                             } else if (originalName.includes('ครู')) {
                                 newObj.name = `ครู${cleanName}`;
@@ -611,6 +612,25 @@
                             }
                             
                             setLateInfo({ count: lateCount, score: deductScore, label: searchKeyword });
+
+                            // --- เพิ่มระบบอัปเดตคาบ 0 เป็น "สาย" อัตโนมัติ (สแกนผ่านกล้อง) ---
+                            const classLevelNum = String(studentInfo.classLevel).replace(/[^0-9]/g, '');
+                            const hrSubCode = `HR00${classLevelNum}`;
+                            const autoAttPayload = {
+                                targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48',
+                                date: scanDateStr,
+                                period: '0',
+                                subjectCode: hrSubCode,
+                                subjectName: 'กิจกรรมหน้าเสาธง/โฮมรูม',
+                                room: `${studentInfo.classLevel}/${studentInfo.room}`,
+                                teacherName: 'ระบบอัตโนมัติ',
+                                records: [{ studentId: studentInfo.code, studentName: studentInfo.name, status: 'สาย', isChanged: true }]
+                            };
+                            callGAS('saveAttendanceBatch', { 
+                                attendance: [autoAttPayload], behaviorsToAdd: [], behaviorsToDelete: [], leavesToAdd: [], leavesToEdit: [], leavesToDelete: [] 
+                            }).catch(e => console.log("Auto attendance error:", e));
+                            // ------------------------------------------------
+
                         } else {
                             setLateInfo(null);
                         }
@@ -811,6 +831,7 @@
             const [selectedStudentForManual, setSelectedStudentForManual] = useState(null);
             const [showConfirmManual, setShowConfirmManual] = useState(false);
             const [isProcessingManual, setIsProcessingManual] = useState(false);
+            const [duplicateError, setDuplicateError] = useState(null);
 
             const uniqueClasses = [...new Set(studentList.map(s => s.classLevel).filter(Boolean))].sort();
             const uniqueRooms = [...new Set(studentList.filter(s => s.classLevel === selectedClass).map(s => s.room).filter(Boolean))].sort((a,b) => Number(a) - Number(b));
@@ -937,9 +958,7 @@
                 if(!selectedStudentForManual) return;
                 
                 const studentToSave = selectedStudentForManual;
-                setShowConfirmManual(false);
-                setSelectedStudentForManual(null);
-                setIsProcessingManual(false);
+                setIsProcessingManual(true);
 
                 const scanNow = new Date();
                 const scanTimeStr = `${String(scanNow.getHours()).padStart(2, '0')}:${String(scanNow.getMinutes()).padStart(2, '0')}`;
@@ -967,9 +986,17 @@
                 // 👆 ------------------------------------------------------------- 👆
 
                 if (isDuplicate) {
-                    setTimeout(() => alert(`นักเรียนถูกบันทึกเวลาเข้า/ออกในรอบนี้ไปแล้ว`), 300);
+                    setShowConfirmManual(false);
+                    setSelectedStudentForManual(null);
+                    setIsProcessingManual(false);
+                    setDuplicateError(`คุณได้บันทึกเวลา${currentType}แล้วก่อนหน้านี้\n(${studentToSave.name})`);
+                    setTimeout(() => { setDuplicateError(null); }, 3000);
                     return;
                 }
+
+                setShowConfirmManual(false);
+                setSelectedStudentForManual(null);
+                setIsProcessingManual(false);
 
                 const newTimeRecord = {
                     id: Date.now(),
@@ -994,14 +1021,107 @@
                 };
 
                 try {
+                    // 1. บันทึกเวลาลงจอและฐานข้อมูล
                     setRecords(prev => [newTimeRecord, ...prev]);
-                    callGAS('saveTime', newTimeRecord).catch(e => console.log(e));
+                    await callGAS('saveTime', newTimeRecord); // ใช้ await ป้องกัน GAS Lock
 
+                    // 2. บันทึกประวัติลืมบัตร
                     if (setForgotCardRecords) {
                         setForgotCardRecords(prev => [newForgotCardRecord, ...(prev || [])]);
                     }
-                    callGAS('saveForgotCardRecord', { ...newForgotCardRecord, targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' }).catch(e => console.log(e));
+                    await callGAS('saveForgotCardRecord', { ...newForgotCardRecord, targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' });
 
+                    let hasDeductedForgotCard = false;
+
+                    // --- 3. จัดการหักคะแนนพฤติกรรมอัตโนมัติ กรณีลืมบัตร ---
+                    try {
+                        // ดึงเกณฑ์พฤติกรรมทั้งหมดที่มีคำว่า "ลืมบัตร" และเป็นประเภท "ลบ"
+                        const allForgotBehaviors = (behaviorsSetting || []).filter(b => String(b.name || '').includes('ลืมบัตร') && b.type === 'ลบ');
+                        
+                        let forgotBehavior = null;
+                        let shouldDeduct = false;
+
+                        if (allForgotBehaviors.length > 0) {
+                            // 1. หาแบบเป๊ะๆ ก่อน เช่น "ครั้งที่ 4"
+                            const exactMatchStr = `ครั้งที่ ${forgotCardCount}`;
+                            forgotBehavior = allForgotBehaviors.find(b => String(b.name || '').includes(exactMatchStr));
+                            
+                            if (forgotBehavior) {
+                                shouldDeduct = true;
+                            } else {
+                                // 2. ระบบค้นหาอัจฉริยะแบบ "เกิน X ครั้ง" (ดึงตัวเลข X ออกมาคำนวณ)
+                                let bestOverMatch = null;
+                                let maxOverX = -1;
+                                
+                                allForgotBehaviors.forEach(b => {
+                                    const name = String(b.name || '');
+                                    const match = name.match(/เกิน\s*(\d+)\s*ครั้ง/); // ค้นหาตัวเลขหลังคำว่า "เกิน"
+                                    if (match) {
+                                        const x = parseInt(match[1], 10);
+                                        // ถ้านับครั้งที่ลืม > X และ X มากที่สุดที่เจอ (กรณีมีการตั้งไว้หลายอัน)
+                                        if (forgotCardCount > x && x > maxOverX) {
+                                            maxOverX = x;
+                                            bestOverMatch = b;
+                                        }
+                                    }
+                                });
+
+                                if (bestOverMatch) {
+                                    forgotBehavior = bestOverMatch;
+                                    shouldDeduct = true;
+                                } else {
+                                    // 3. หาแบบพื้นฐาน (ไม่มีคำว่าครั้งระบุไว้) หักทุกรอบที่หาเกณฑ์แบบเป๊ะๆ ไม่เจอ
+                                    forgotBehavior = allForgotBehaviors.find(b => !String(b.name || '').includes('ครั้ง'));
+                                    if (forgotBehavior) {
+                                        shouldDeduct = true;
+                                    } else {
+                                        // ไม่ตรงกับเกณฑ์ใดๆ เลย (เช่น ตั้งไว้แค่ ครั้งที่ 4 แต่เพิ่งลืมครั้งที่ 1)
+                                        shouldDeduct = false;
+                                    }
+                                }
+                            }
+                        } else {
+                            // ไม่มีตั้งค่าเลย ให้ใช้ค่าตั้งต้น
+                            let defaultScore = -5;
+                            if (forgotCardCount === 2) defaultScore = -10;
+                            if (forgotCardCount >= 3) defaultScore = -15;
+                            forgotBehavior = { name: 'ลืมบัตรประจำตัวนักเรียน', score: defaultScore, type: 'ลบ' };
+                            shouldDeduct = true;
+                        }
+
+                        if (shouldDeduct && forgotBehavior) {
+                            hasDeductedForgotCard = true;
+                            
+                            // บังคับคะแนนให้เป็นติดลบ 
+                            const deductFScore = -Math.abs(Number(forgotBehavior.score)); 
+                            
+                            let finalFBehaviorName = forgotBehavior.name;
+                            // ถ้าชื่อพฤติกรรมไม่ได้ระบุครั้งไว้ ให้เติมต่อท้ายเพื่อให้รู้ว่าหักจากการลืมครั้งที่เท่าไหร่
+                            if (!finalFBehaviorName.includes('ครั้ง')) {
+                                finalFBehaviorName = `${finalFBehaviorName} (ครั้งที่ ${forgotCardCount})`;
+                            }
+
+                            const newForgotBehaviorRecord = {
+                                id: Date.now() + 3,
+                                date: scanDateStr,
+                                studentId: studentToSave.code,
+                                name: studentToSave.name,
+                                room: `${studentToSave.classLevel}/${studentToSave.room}`,
+                                behaviorName: finalFBehaviorName,
+                                score: deductFScore,
+                                recorder: user ? user.name : 'ระบบอัตโนมัติ (ลืมบัตร)',
+                                type: 'ลบ'
+                            };
+
+                            if (setBehaviorRecords) setBehaviorRecords(prev => [newForgotBehaviorRecord, ...(prev || [])]);
+                            await callGAS('saveBehaviorRecord', { ...newForgotBehaviorRecord, targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' });
+                        }
+                    } catch (err) {
+                        console.log("Auto behavior (forgot card) error:", err);
+                    }
+                    // ------------------------------------------------
+
+                    // 4. หักคะแนนมาสายอัตโนมัติ
                     if (scanIsLate && currentType === "เข้า" && !isExempted) {
                         const autoScore = schoolConfig && schoolConfig.autoScoreSettings ? schoolConfig.autoScoreSettings : {};
                         if (autoScore.school_late === true) {
@@ -1012,13 +1132,14 @@
 
                             let lateBehavior = (behaviorsSetting || []).find(b => b.name.includes('สาย') && b.name.includes(searchKeyword));
                             if (!lateBehavior) {
-                                let defaultScore = -5;
+                                let defaultScore = -5; // ติดลบ
                                 if (lateCount === 2) defaultScore = -10;
                                 if (lateCount === 3) defaultScore = -15;
                                 if (lateCount > 3) defaultScore = -20;
                                 lateBehavior = (behaviorsSetting || []).find(b => b.name.includes('สาย') && !b.name.includes('ครั้ง')) || { name: 'มาโรงเรียนสาย', score: defaultScore, type: 'ลบ' };
                             }
 
+                            // สำคัญ: บังคับคะแนนให้เป็นติดลบ
                             const deductScore = -Math.abs(Number(lateBehavior.score));
                             const finalBehaviorName = lateBehavior.name.includes(searchKeyword) ? lateBehavior.name : `${lateBehavior.name} (${searchKeyword})`;
 
@@ -1034,14 +1155,38 @@
                                 type: 'ลบ'
                             };
 
-                            callGAS('saveBehaviorRecord', { ...newBehaviorRecord, targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' }).catch(e => console.log(e));
                             if (setBehaviorRecords) setBehaviorRecords(prev => [newBehaviorRecord, ...(prev || [])]);
+                            await callGAS('saveBehaviorRecord', { ...newBehaviorRecord, targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' });
                         }
+
+                        // --- เพิ่มระบบอัปเดตคาบ 0 เป็น "สาย" อัตโนมัติ (กรณีลืมบัตร) ---
+                        const classLevelNum = String(studentToSave.classLevel).replace(/[^0-9]/g, '');
+                        const hrSubCode = `HR00${classLevelNum}`;
+                        const autoAttPayload = {
+                            targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48',
+                            date: scanDateStr,
+                            period: '0',
+                            subjectCode: hrSubCode,
+                            subjectName: 'กิจกรรมหน้าเสาธง/โฮมรูม',
+                            room: `${studentToSave.classLevel}/${studentToSave.room}`,
+                            teacherName: 'ระบบอัตโนมัติ',
+                            records: [{ studentId: studentToSave.code, studentName: studentToSave.name, status: 'สาย', isChanged: true }]
+                        };
+                        callGAS('saveAttendanceBatch', { 
+                            attendance: [autoAttPayload], behaviorsToAdd: [], behaviorsToDelete: [], leavesToAdd: [], leavesToEdit: [], leavesToDelete: [] 
+                        }).catch(e => console.log("Auto attendance error:", e));
+                        // ------------------------------------------------
                     }
 
                     setTimeout(() => {
                         let msg = `บันทึกเวลาเข้า-ออก และประวัติลืมบัตรสำเร็จ!\n(${studentToSave.name})`;
                         if (isExempted) msg += `\n\n* ได้รับการยกเว้นมาสาย: ${studentExemption.reason}`;
+                        
+                        if (hasDeductedForgotCard) {
+                            msg += `\n* หักคะแนนพฤติกรรมลืมบัตรอัตโนมัติ (ครั้งที่ ${forgotCardCount})`;
+                        } else {
+                            msg += `\n* บันทึกประวัติลืมบัตรครั้งที่ ${forgotCardCount} (ยังไม่ถึงเกณฑ์หักคะแนน)`;
+                        }
                         alert(msg);
                     }, 300);
                 } catch(e) {
@@ -1089,8 +1234,32 @@
                                                 const id = e.target.value;
                                                 const found = studentList.find(s => String(s.id) === String(id));
                                                 if(found) {
-                                                    setSelectedStudentForManual(found);
-                                                    setShowConfirmManual(true);
+                                                    // --- เพิ่มระบบตรวจสอบข้อมูลซ้ำทันทีที่เลือกชื่อ ---
+                                                    const scanNow = new Date();
+                                                    const scanTimeStr = `${String(scanNow.getHours()).padStart(2, '0')}:${String(scanNow.getMinutes()).padStart(2, '0')}`;
+                                                    const scanDateStr = `${String(scanNow.getDate()).padStart(2, '0')}/${String(scanNow.getMonth() + 1).padStart(2, '0')}/${scanNow.getFullYear() + 543}`;
+                                                    
+                                                    const { isOutMode } = determineModeAndLate(scanTimeStr, timeSettings.startIn, timeSettings.lateTime, timeSettings.startOut);
+                                                    const currentType = isOutMode ? "ออก" : "เข้า";
+
+                                                    // ตรวจสอบว่าเคยบันทึกประเภทนี้ในวันนี้หรือยัง
+                                                    const isDuplicate = records.some(r => 
+                                                        String(r.studentId).trim() === String(found.code).trim() && 
+                                                        formatDisplayDate(r.date) === scanDateStr && 
+                                                        r.type === currentType
+                                                    );
+
+                                                    if (isDuplicate) {
+                                                        // ถ้าซ้ำ ให้โชว์แจ้งเตือนสีแดงทันที (ไม่ต้องโชว์ป๊อปอัปยืนยันลืมบัตร)
+                                                        setDuplicateError(`คุณได้บันทึกเวลา${currentType}แล้วก่อนหน้านี้\n(${found.name})`);
+                                                        setTimeout(() => { setDuplicateError(null); }, 3000);
+                                                    } else {
+                                                        // ถ้ายังไม่ซ้ำ ถึงจะค่อยโชว์ป๊อปอัปยืนยัน
+                                                        setSelectedStudentForManual(found);
+                                                        setShowConfirmManual(true);
+                                                    }
+                                                    
+                                                    // เคลียร์ค่ากลับเป็นค่าเริ่มต้น เพื่อให้สามารถคลิกเลือกคนเดิมซ้ำได้ในกรณีที่ลบประวัติแล้วเลือกใหม่
                                                     e.target.value = "";
                                                 }
                                             }} className="w-full border-2 border-ns-blue rounded-lg p-2 bg-white focus:ring-2 focus:ring-ns-blue outline-none font-bold" disabled={!selectedRoom}>
@@ -1119,12 +1288,15 @@
                                         <th className="p-3 border text-center">ชั้น/ห้อง</th>
                                         <th className="p-3 border text-center">เวลา</th>
                                         <th className="p-3 border text-center">สถานะ</th>
-                                        <th className="p-3 border text-center w-28">จัดการ</th>
+                                        {/* จำกัดสิทธิ์การมองเห็นหัวตาราง 'จัดการ' */}
+                                        {(user && (user.role === 'admin' || user.role === 'administrative')) && (
+                                            <th className="p-3 border text-center w-28">จัดการ</th>
+                                        )}
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {records.length === 0 ? (
-                                        <tr><td colSpan="7" className="text-center p-6 text-gray-400">ยังไม่มีข้อมูลการสแกนในวันนี้</td></tr>
+                                        <tr><td colSpan={(user && (user.role === 'admin' || user.role === 'administrative')) ? "7" : "6"} className="text-center p-6 text-gray-400">ยังไม่มีข้อมูลการสแกนในวันนี้</td></tr>
                                     ) : (
                                         records.map(r => (
                                             <tr key={r.id} className="border-b hover:bg-gray-50">
@@ -1136,10 +1308,13 @@
                                                 <td className="p-2 border text-center">
                                                     <span className={`px-2 py-1 rounded text-xs text-white ${r.statusStr === 'สาย' ? 'bg-red-500' : 'bg-green-500'}`}>{r.statusStr}</span>
                                                 </td>
-                                                <td className="p-2 border text-center space-x-2">
-                                                    <button onClick={() => setEditingRecord({...r, date: formatDisplayDate(r.date), time: formatDisplayTime(r.time)})} className="text-blue-500 hover:text-blue-700 bg-blue-50 p-1.5 rounded"><i className="fa-solid fa-edit"></i></button>
-                                                    <button onClick={() => handleDelete(r.id)} className="text-red-500 hover:text-red-700 bg-red-50 p-1.5 rounded"><i className="fa-solid fa-trash"></i></button>
-                                                </td>
+                                                {/* จำกัดสิทธิ์การมองเห็นปุ่ม แก้ไข/ลบ */}
+                                                {(user && (user.role === 'admin' || user.role === 'administrative')) && (
+                                                    <td className="p-2 border text-center space-x-2">
+                                                        <button onClick={() => setEditingRecord({...r, date: formatDisplayDate(r.date), time: formatDisplayTime(r.time)})} className="text-blue-500 hover:text-blue-700 bg-blue-50 p-1.5 rounded"><i className="fa-solid fa-edit"></i></button>
+                                                        <button onClick={() => handleDelete(r.id)} className="text-red-500 hover:text-red-700 bg-red-50 p-1.5 rounded"><i className="fa-solid fa-trash"></i></button>
+                                                    </td>
+                                                )}
                                             </tr>
                                         ))
                                     )}
@@ -1215,6 +1390,17 @@
                     )}
 
                     {showScanner && <ScannerPopup onClose={() => setShowScanner(false)} timeSettings={timeSettings} onRecordSaved={handleRecordSaved} records={records} currentGps={currentGps} studentList={studentList} schoolConfig={schoolConfig} behaviorsSetting={behaviorsSetting} behaviorRecords={behaviorRecords} setBehaviorRecords={setBehaviorRecords} user={user} exemptions={exemptions} />}
+                    
+                    {duplicateError && (
+                        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 transition-opacity">
+                            <div className="bg-white border-b-8 border-red-500 w-full max-w-sm p-6 rounded-2xl shadow-2xl animate-[bounce_0.5s_ease-in-out]">
+                                <div className="flex flex-col items-center text-red-500 mb-2">
+                                    <i className="fa-solid fa-triangle-exclamation text-6xl mb-4 drop-shadow-md"></i>
+                                    <h3 className="text-xl font-extrabold text-red-600 text-center leading-relaxed whitespace-pre-line">{duplicateError}</h3>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
             );
         };
@@ -5922,9 +6108,9 @@
             const [isSaving, setIsSaving] = useState(false);
             const [deletingGroup, setDeletingGroup] = useState(null);
 
-            // ดึงรายชื่อกลุ่มสาระทั้งหมดจากข้อมูลครูสำหรับให้แอดมินเลือก (เพิ่มกลุ่มสาระมาตรฐาน)
-            const standardDepts = ['วิทยาศาสตร์และเทคโนโลยี', 'คณิตศาสตร์', 'ภาษาไทย', 'ภาษาต่างประเทศ', 'สังคมศึกษา ศาสนาและวัฒนธรรม', 'การงานอาชีพ', 'สุขศึกษาและพลศึกษา', 'ศิลปะ'];
-            const departments = [...new Set([...standardDepts, ...(teachers || []).map(t => t.department).filter(Boolean)])].sort();
+            // ดึงรายชื่อกลุ่มสาระทั้งหมดจากข้อมูลครูสำหรับให้แอดมินเลือก (เพิ่มกลุ่มสาระมาตรฐาน และใช้ .trim() ป้องกันปัญหาช่องว่าง)
+            const standardDepts = ['วิทยาศาสตร์และเทคโนโลยี', 'คณิตศาสตร์', 'ภาษาไทย', 'ภาษาต่างประเทศ', 'สังคมศึกษา ศาสนาและวัฒนธรรม', 'การงานอาชีพ', 'สุขศึกษาและพลศึกษา', 'ศิลปะ', 'แนะแนว', 'กิจกรรมพัฒนาผู้เรียน'];
+            const departments = [...new Set([...standardDepts, ...(teachers || []).map(t => String(t.department || '').trim()).filter(Boolean)])].sort();
 
             // ย้ายฟังก์ชันตัดคำนำหน้าและอักขระพิเศษมาไว้ด้านนอก เพื่อให้ใช้ร่วมกันได้ทั้งหมด
             const normalizeName = (name) => {
@@ -6038,10 +6224,10 @@
                 fetchAllSchedules();
             }, []);
 
-            // แก้ไข: กรองครูตามบทบาท ถ้าเป็น admin ให้กรองตาม dropdown ที่เลือก (selectedDept)
+            // แก้ไข: กรองครูตามบทบาท ใช้ String().trim() เพื่อป้องกันปัญหาช่องว่างส่วนเกินจากฐานข้อมูล
             const deptTeachers = (user && user.role === 'admin') 
-                ? teachers.filter(t => selectedDept ? t.department === selectedDept : true)
-                : teachers.filter(t => t.department === myDepartment);
+                ? teachers.filter(t => selectedDept ? String(t.department || '').trim() === String(selectedDept).trim() : true)
+                : teachers.filter(t => String(t.department || '').trim() === String(myDepartment).trim());
             
             // แก้ไข: กรองตารางสอนของครูที่เลือก โดยใช้ normalizeName เพื่อให้ข้อมูลตรงกันแม้มีคำนำหน้าหรือช่องว่าง
             const targetCleanTeacher = normalizeName(selectedTeacher);
@@ -6267,16 +6453,16 @@
                 window.scrollTo({ top: 0, behavior: 'smooth' });
             };
 
-            // กรองประวัติการลงทะเบียนตามสิทธิ์และกลุ่มสาระที่เลือก
+            // กรองประวัติการลงทะเบียนตามสิทธิ์และกลุ่มสาระที่เลือก (เพิ่ม .trim() ป้องกันช่องว่าง)
             const displayRecords = (records || []).filter(r => {
                 if (user && user.role === 'admin' && !selectedDept) return true; // แอดมินดูได้ทั้งหมดถ้าไม่ได้เลือกกลุ่มสาระ
                 
                 const targetDept = (user && user.role === 'admin') ? selectedDept : myDepartment;
                 const rTeacherNorm = normalizeName(r.teacherName);
                 const teacherObj = (teachers || []).find(t => normalizeName(t.name) === rTeacherNorm);
-                const recordDept = teacherObj ? teacherObj.department : 'ไม่ระบุกลุ่มสาระ';
+                const recordDept = teacherObj ? String(teacherObj.department || '').trim() : 'ไม่ระบุกลุ่มสาระ';
                 
-                return recordDept === targetDept;
+                return recordDept === String(targetDept || '').trim();
             });
 
             const groupedRecords = [];
@@ -6704,6 +6890,7 @@
                 </div>
             );
         };
+
 // 14. หน้าเช็คชื่อเข้าเรียน (AttendanceView)
         const AttendanceView = ({ user, students, leaveRecords, setLeaveRecords, periodSettings, behaviorsSetting, behaviorRecords, setBehaviorRecords, registrations, allSchedules, teachers = [], schoolConfig }) => {
             const React = window.React || require('react');
@@ -6810,6 +6997,95 @@
                         records: [{ studentId: stuCode, studentName: stuName, status: status, isChanged: true }]
                     });
                 });
+
+                // --- Behavior Check for Scanned Record ---
+                const autoScoreSettings = schoolConfig && schoolConfig.autoScoreSettings ? schoolConfig.autoScoreSettings : {};
+                const autoAttLate = autoScoreSettings.att_late === true;
+                
+                if (status === 'สาย' && autoAttLate) {
+                    let lateMinutes = 0;
+                    let isEditingPast = false;
+                    let lateThresholdMinutes = 0; 
+                    let hasLateCriteria = false;
+                    let lateCriteriaKeyword = 'เข้าเรียนสาย';
+
+                    const lateBehaviorSetting = (behaviorsSetting || []).find(b => b.name && b.name.includes('เข้าห้องเรียนสายเกิน'));
+                    if (lateBehaviorSetting) {
+                        hasLateCriteria = true;
+                        lateCriteriaKeyword = lateBehaviorSetting.name.replace(/\s*\(ครั้งที่.*\)/, '').trim(); 
+                        const match = lateCriteriaKeyword.match(/\d+/);
+                        if (match) {
+                            lateThresholdMinutes = parseInt(match[0], 10);
+                        }
+                    }
+
+                    if (activePeriods && activePeriods.length > 0) {
+                        const pSetting = (periodSettings || []).find(p => String(p.period) === String(activePeriods[0]));
+                        if (pSetting && pSetting.start) {
+                            const nowTime = new Date();
+                            const todayStr = `${nowTime.getFullYear()}-${String(nowTime.getMonth()+1).padStart(2,'0')}-${String(nowTime.getDate()).padStart(2,'0')}`;
+                            if (currentDate === todayStr) {
+                                const [startH, startM] = pSetting.start.split(':').map(Number);
+                                const startTimeMinutes = startH * 60 + startM;
+                                const currentTimeMinutes = nowTime.getHours() * 60 + nowTime.getMinutes();
+                                lateMinutes = currentTimeMinutes - startTimeMinutes;
+                                if (lateMinutes < 0) lateMinutes = 0;
+                                if (lateMinutes > 180) isEditingPast = true; 
+                            } else {
+                                isEditingPast = true; 
+                            }
+                        }
+                    }
+                    const lateDynamicPrefix = (lateMinutes > 0 && !isEditingPast) ? `เข้าเรียนสายเกินเวลา ${lateMinutes} นาที` : 'เข้าเรียนสายเกินเวลาที่กำหนด';
+
+                    if (!hasLateCriteria || lateMinutes > lateThresholdMinutes) {
+                        const periodLabel = activePeriods.length > 1 ? `(คาบ ${activePeriods[0]}-${activePeriods[activePeriods.length-1]})` : `(คาบ ${activePeriods[0]})`;
+                        const baseBehaviorNameMatch = `วิชา${activeSubject.subjectName || ''} ${periodLabel}`;
+                        
+                        const isPeriodZero = activePeriods.includes('0') || activePeriods.includes('คาบ 0') || activePeriods.includes('โฮมรูม') || String(activeSubject.subjectCode).startsWith('HR');
+                        
+                        const pastCount = (behaviorRecords || []).filter(r => 
+                            String(r.studentId).trim() === String(stuCode).trim() && 
+                            String(r.behaviorName || '').includes(lateCriteriaKeyword)
+                        ).length + 1;
+                        
+                        let searchKeyword = `ครั้งที่ ${pastCount}`;
+                        if (pastCount > 3) searchKeyword = "เกิน 3 ครั้ง";
+                        
+                        let bSetting = (behaviorsSetting || []).find(b => String(b.name || '').includes(lateCriteriaKeyword) && String(b.name || '').includes(searchKeyword));
+                        if (!bSetting) {
+                            let defaultScores = isPeriodZero ? [-5, -10, -15] : [-3, -5, -10];
+                            let defaultScore = defaultScores[0];
+                            if (pastCount === 2 && defaultScores.length > 1) defaultScore = defaultScores[1];
+                            if (pastCount >= 3 && defaultScores.length > 2) defaultScore = defaultScores[2];
+                            if (pastCount > 3 && defaultScores.length > 3) defaultScore = defaultScores[3];
+                                    
+                            bSetting = (behaviorsSetting || []).find(b => String(b.name || '').includes(lateCriteriaKeyword) && !String(b.name || '').includes('ครั้ง')) || 
+                                       { name: lateCriteriaKeyword, score: defaultScore, type: 'ลบ' };
+                        }
+                        
+                        const deductScore = -Math.abs(Number(bSetting.score));
+                        const finalName = isPeriodZero 
+                            ? (lateDynamicPrefix.includes(searchKeyword) ? lateDynamicPrefix : `${lateDynamicPrefix} (${searchKeyword})`) 
+                            : (`${lateDynamicPrefix} ${baseBehaviorNameMatch} ${searchKeyword}`);
+
+                        const newBehaviorRecord = {
+                            id: Date.now() + Math.floor(Math.random() * 1000),
+                            date: dbDate,
+                            studentId: stuCode,
+                            name: stuName,
+                            room: activeSubject.room,
+                            behaviorName: finalName.trim(),
+                            score: deductScore,
+                            recorder: user ? user.name : 'ระบบอัตโนมัติ',
+                            type: 'ลบ',
+                            suppressLineNotify: true
+                        };
+                
+                        batchPayload.behaviorsToAdd.push(newBehaviorRecord); 
+                        if (setBehaviorRecords) setBehaviorRecords(prev => [newBehaviorRecord, ...(prev || [])]);
+                    }
+                }
 
                 if (typeof callGAS === 'function') {
                     callGAS('saveAttendanceBatch', batchPayload).catch(e => console.error("Auto save scan error:", e));
@@ -7381,6 +7657,47 @@
                     const periodLabel = activePeriods.length > 1 ? `(คาบ ${activePeriods[0]}-${activePeriods[activePeriods.length-1]})` : `(คาบ ${activePeriods[0]})`;
                     const baseBehaviorNameMatch = `วิชา${activeSubject.subjectName || ''} ${periodLabel}`;
 
+                    // --- คำนวณจำนวนนาทีที่มาสาย และหาเกณฑ์การหักคะแนน ---
+                    let lateMinutes = 0;
+                    let isEditingPast = false;
+                    let lateThresholdMinutes = 0; 
+                    let hasLateCriteria = false;
+                    let lateCriteriaKeyword = 'เข้าเรียนสาย';
+
+                    // ค้นหาเกณฑ์ "เข้าห้องเรียนสายเกิน [ ] นาที" จากการตั้งค่าพฤติกรรม
+                    const lateBehaviorSetting = (behaviorsSetting || []).find(b => b.name && b.name.includes('เข้าห้องเรียนสายเกิน'));
+                    if (lateBehaviorSetting) {
+                        hasLateCriteria = true;
+                        lateCriteriaKeyword = lateBehaviorSetting.name.replace(/\s*\(ครั้งที่.*\)/, '').trim(); 
+                        const match = lateCriteriaKeyword.match(/\d+/);
+                        if (match) {
+                            lateThresholdMinutes = parseInt(match[0], 10);
+                        }
+                    }
+
+                    if (activePeriods && activePeriods.length > 0) {
+                        const pSetting = (periodSettings || []).find(p => String(p.period) === String(activePeriods[0]));
+                        if (pSetting && pSetting.start) {
+                            const nowTime = new Date();
+                            const todayStr = `${nowTime.getFullYear()}-${String(nowTime.getMonth()+1).padStart(2,'0')}-${String(nowTime.getDate()).padStart(2,'0')}`;
+                            
+                            // ตรวจสอบว่าเช็คชื่อในวันปัจจุบันหรือไม่ (ป้องกันการแก้ไขย้อนหลังที่ทำให้เวลาเพี้ยน)
+                            if (currentDate === todayStr) {
+                                const [startH, startM] = pSetting.start.split(':').map(Number);
+                                const startTimeMinutes = startH * 60 + startM;
+                                const currentTimeMinutes = nowTime.getHours() * 60 + nowTime.getMinutes();
+                                lateMinutes = currentTimeMinutes - startTimeMinutes;
+                                
+                                if (lateMinutes < 0) lateMinutes = 0;
+                                if (lateMinutes > 180) isEditingPast = true; // ป้องกันการคำนวณผิดพลาดเมื่อบันทึกข้ามเวลาไปนานมาก (เกิน 3 ชั่วโมง)
+                            } else {
+                                isEditingPast = true; // เป็นการแก้ไขข้อมูลของวันอื่น
+                            }
+                        }
+                    }
+                    const lateDynamicPrefix = (lateMinutes > 0 && !isEditingPast) ? `เข้าเรียนสายเกินเวลา ${lateMinutes} นาที` : 'เข้าเรียนสายเกินเวลาที่กำหนด';
+                    // -----------------------------
+
                     let skipAddedCount = 0; let absentAddedCount = 0; let lateAddedCount = 0; let leaveAddedCount = 0; let flagAbsentAddedCount = 0; 
                     
                     const autoScoreSettings = schoolConfig && schoolConfig.autoScoreSettings ? schoolConfig.autoScoreSettings : {};
@@ -7408,7 +7725,7 @@
                             }
                         };
                         
-                        const addBehavior = (keyword, baseName, defaultScores) => {
+                        const addBehavior = (keyword, baseName, defaultScores, customPrefix = null) => {
                             const existing = (behaviorRecords || []).find(r => 
                                 formatDisplayDate(r.date) === dbDate && 
                                 String(r.studentId).trim() === String(stu.studentId).trim() &&
@@ -7436,9 +7753,11 @@
                                 }
                                 
                                 const deductScore = -Math.abs(Number(bSetting.score));
+                                const prefixToUse = customPrefix || bSetting.name;
+
                                 const finalName = isPeriodZero 
-                                    ? (bSetting.name.includes(searchKeyword) ? bSetting.name : `${bSetting.name} (${searchKeyword})`) 
-                                    : `${keyword}${baseName} ${searchKeyword}`;
+                                    ? (prefixToUse.includes(searchKeyword) ? prefixToUse : `${prefixToUse} (${searchKeyword})`) 
+                                    : (customPrefix ? `${customPrefix} ${baseName} ${searchKeyword}` : `${keyword} ${baseName} ${searchKeyword}`);
 
                                 const newBehaviorRecord = {
                                     id: Date.now() + Math.floor(Math.random() * 1000) + skipAddedCount + absentAddedCount + lateAddedCount + flagAbsentAddedCount,
@@ -7446,7 +7765,7 @@
                                     studentId: studentInfo.code,
                                     name: studentInfo.name,
                                     room: `${studentInfo.classLevel}/${studentInfo.room}`,
-                                    behaviorName: finalName,
+                                    behaviorName: finalName.trim(),
                                     score: deductScore,
                                     recorder: user ? user.name : 'ระบบอัตโนมัติ',
                                     type: 'ลบ',
@@ -7461,12 +7780,22 @@
                         };
 
                         if (stu.isChanged) {
-                            removeOldBehavior('หนีเรียน'); removeOldBehavior('ขาดเรียน'); removeOldBehavior('มาสาย'); removeOldBehavior('ไม่เข้าร่วมกิจกรรมหน้าเสาธง/โฮมรูม');
+                            removeOldBehavior('หนีเรียน'); 
+                            removeOldBehavior('ขาดเรียน'); 
+                            removeOldBehavior('มาสาย'); 
+                            removeOldBehavior('มาสายเกินเวลาที่กำหนด');
+                            removeOldBehavior('เข้าเรียนสาย'); 
+                            removeOldBehavior('เข้าห้องเรียนสายเกิน');
+                            removeOldBehavior('ไม่เข้าร่วมกิจกรรมหน้าเสาธง/โฮมรูม');
                         }
 
                         if (isPeriodZero) {
                             if ((stu.status === 'ขาด' || stu.status === 'หนีเรียน') && autoFlagAbsent) {
                                 if (addBehavior('ไม่เข้าร่วมกิจกรรมหน้าเสาธง/โฮมรูม', '', [-5, -5, -5])) flagAbsentAddedCount++;
+                            } else if (stu.status === 'สาย' && autoAttLate) {
+                                if (!hasLateCriteria || lateMinutes > lateThresholdMinutes) {
+                                    if (addBehavior(lateCriteriaKeyword, '', [-5, -10, -15], lateDynamicPrefix)) lateAddedCount++;
+                                }
                             }
                         } else {
                             if (stu.status === 'หนีเรียน' && autoAttSkip) {
@@ -7474,39 +7803,13 @@
                             } else if (stu.status === 'ขาด' && autoAttAbsent) {
                                 if (addBehavior('ขาดเรียน', baseBehaviorNameMatch, [-5, -10, -15])) absentAddedCount++;
                             } else if (stu.status === 'สาย' && autoAttLate) {
-                                if (addBehavior('มาสาย', baseBehaviorNameMatch, [-3, -5, -10])) lateAddedCount++;
+                                if (!hasLateCriteria || lateMinutes > lateThresholdMinutes) {
+                                    if (addBehavior(lateCriteriaKeyword, baseBehaviorNameMatch, [-3, -5, -10], lateDynamicPrefix)) lateAddedCount++;
+                                }
                             }
                         }
 
                         const existingLeave = (leaveRecords || []).find(r => formatDisplayDate(r.date) === dbDate && String(r.studentId).trim() === String(stu.studentId).trim());
-
-                        if (['ลาป่วย', 'ลากิจ', 'ไปกิจกรรม'].includes(stu.status)) {
-                            if (!existingLeave || existingLeave.leaveType !== stu.status) {
-                                if (existingLeave) {
-                                    const updatedLeaveRecord = { ...existingLeave, leaveType: stu.status };
-                                    batchPayload.leavesToEdit.push(updatedLeaveRecord);
-                                    if (setLeaveRecords) setLeaveRecords(prev => prev.map(r => r.id === existingLeave.id ? updatedLeaveRecord : r));
-                                } else {
-                                    const newLeaveRecord = {
-                                        id: Date.now() + Math.floor(Math.random() * 1000) + 1 + leaveAddedCount,
-                                        date: dbDate,
-                                        studentId: studentInfo.code,
-                                        name: studentInfo.name,
-                                        room: `${studentInfo.classLevel}/${studentInfo.room}`,
-                                        leaveType: stu.status,
-                                        recorder: user ? user.name : 'ระบบอัตโนมัติ'
-                                    };
-                                    batchPayload.leavesToAdd.push(newLeaveRecord);
-                                    if (setLeaveRecords) setLeaveRecords(prev => [newLeaveRecord, ...(prev || [])]);
-                                    leaveAddedCount++;
-                                }
-                            }
-                        } else {
-                            if (existingLeave) {
-                                batchPayload.leavesToDelete.push(existingLeave.id);
-                                if (setLeaveRecords) setLeaveRecords(prev => prev.filter(p => p.id !== existingLeave.id));
-                            }
-                        }
                     }
 
                     const response = await callGAS('saveAttendanceBatch', batchPayload);
@@ -7525,26 +7828,26 @@
                         return { ...prev, [cacheKey]: [...filtered, ...toAdd] };
                     });
 
-                    setIsEditMode(true); 
+            setIsEditMode(true); 
 
-                    let alertMsg = activePeriods.length > 1 ? `จำนวน ${activePeriods.length} คาบติดต่อกัน` : 'ข้อมูลถูกส่งเข้าสู่ฐานข้อมูลเรียบร้อยแล้ว';
-                    if (skipAddedCount > 0) alertMsg += `\n* หักคะแนนหนีเรียนอัตโนมัติ ${skipAddedCount} คน`;
-                    if (absentAddedCount > 0) alertMsg += `\n* หักคะแนนขาดเรียนอัตโนมัติ ${absentAddedCount} คน`;
-                    if (lateAddedCount > 0) alertMsg += `\n* หักคะแนนมาสายอัตโนมัติ ${lateAddedCount} คน`;
-                    if (flagAbsentAddedCount > 0) alertMsg += `\n* หักคะแนนขาดหน้าเสาธงอัตโนมัติ ${flagAbsentAddedCount} คน`;
-                    if (leaveAddedCount > 0) alertMsg += `\n* เพิ่มประวัติแจ้งลาอัตโนมัติ ${leaveAddedCount} คน`;
-                    
-                    setSavePopup({ type: 'success', title: isEditMode ? 'แก้ไขข้อมูลสำเร็จ!' : 'บันทึกข้อมูลสำเร็จ!', message: alertMsg });
-                    setTimeout(() => setSavePopup(null), 3000);
+            let alertMsg = activePeriods.length > 1 ? `จำนวน ${activePeriods.length} คาบติดต่อกัน` : 'ข้อมูลถูกส่งเข้าสู่ฐานข้อมูลเรียบร้อยแล้ว';
+            if (skipAddedCount > 0) alertMsg += `\n* หักคะแนนหนีเรียนอัตโนมัติ ${skipAddedCount} คน`;
+            if (absentAddedCount > 0) alertMsg += `\n* หักคะแนนขาดเรียนอัตโนมัติ ${absentAddedCount} คน`;
+            if (lateAddedCount > 0) alertMsg += `\n* หักคะแนนเข้าเรียนสายอัตโนมัติ ${lateAddedCount} คน`;
+            if (flagAbsentAddedCount > 0) alertMsg += `\n* หักคะแนนขาดหน้าเสาธงอัตโนมัติ ${flagAbsentAddedCount} คน`;
+            if (leaveAddedCount > 0) alertMsg += `\n* เพิ่มประวัติแจ้งลาอัตโนมัติ ${leaveAddedCount} คน`;
+            
+            setSavePopup({ type: 'success', title: isEditMode ? 'แก้ไขข้อมูลสำเร็จ!' : 'บันทึกข้อมูลสำเร็จ!', message: alertMsg });
+            setTimeout(() => setSavePopup(null), 3000);
 
-                } catch (error) {
-                    setSavePopup({ type: 'error', title: 'เกิดข้อผิดพลาด', message: error.message });
-                    setTimeout(() => setSavePopup(null), 4000);
-                }
-                setIsSaving(false);
-            };
+        } catch (error) {
+            setSavePopup({ type: 'error', title: 'เกิดข้อผิดพลาด', message: error.message });
+            setTimeout(() => setSavePopup(null), 4000);
+        }
+        setIsSaving(false);
+    };
 
-            const standardDepts = ['วิทยาศาสตร์และเทคโนโลยี', 'คณิตศาสตร์', 'ภาษาไทย', 'ภาษาต่างประเทศ', 'สังคมศึกษา ศาสนาและวัฒนธรรม', 'การงานอาชีพ', 'สุขศึกษาและพลศึกษา', 'ศิลปะ'];
+    const standardDepts = ['วิทยาศาสตร์และเทคโนโลยี', 'คณิตศาสตร์', 'ภาษาไทย', 'ภาษาต่างประเทศ', 'สังคมศึกษา ศาสนาและวัฒนธรรม', 'การงานอาชีพ', 'สุขศึกษาและพลศึกษา', 'ศิลปะ'];
             const departments = [...new Set([...standardDepts, ...(teachers || []).map(t => t.department).filter(Boolean)])].sort();
             const filteredTeachersForReport = teachers.filter(t => reportDept ? t.department === reportDept : true);
 
@@ -8630,17 +8933,22 @@
             const [editingBehaviorId, setEditingBehaviorId] = useState(null);
             const [editBehaviorData, setEditBehaviorData] = useState({});
 
-            // --- ฟังก์ชันช่วยเหลือสำหรับจัดการและแปลงข้อมูลสิทธิบันทึก ---
+            // 💡 ปรับแต่งฟังก์ชันแปลงสิทธิ์ (Role) ให้รัดกุม ป้องกันบั๊กเติมคำว่า "ครู" ให้ "แอดมิน"
             const getRoleValue = (role) => {
-                if (!role) return '';
+                if (!role) return 'all';
                 const r = String(role).trim().toLowerCase();
-                if (r === 'admin' || r === 'แอดมิน') return 'admin';
-                if (r === 'dept_admin' || r === 'แอดมินกลุ่มสาระ') return 'dept_admin';
-                if (r === 'executive' || r.includes('บริหาร') || r.includes('ผอ')) return 'executive';
-                if (r === 'administrative' || r.includes('ปกครอง')) return 'administrative';
-                if (r === 'user' || r.includes('ทั่วไป') || r === 'ครู') return 'user';
-                if (r === 'all' || r.includes('ทุกคน')) return 'all';
-                return '';
+                
+                // ลบคำว่า "ครู" ออกชั่วคราว เพื่อป้องกันการเช็คเงื่อนไขที่ซ้ำซ้อน
+                const cleanRole = r.replace(/^ครู\s*/, ''); 
+                
+                if (cleanRole === 'admin' || cleanRole === 'แอดมิน') return 'admin';
+                if (cleanRole === 'dept_admin' || cleanRole.includes('กลุ่มสาระ')) return 'dept_admin';
+                if (cleanRole === 'executive' || cleanRole.includes('บริหาร') || cleanRole.includes('ผอ')) return 'executive';
+                if (cleanRole === 'administrative' || cleanRole.includes('ปกครอง')) return 'administrative';
+                if (cleanRole === 'user' || cleanRole.includes('ทั่วไป') || cleanRole === 'ผู้ใช้ทั่วไป') return 'user';
+                if (cleanRole === 'all' || cleanRole.includes('ทุกคน')) return 'all';
+                
+                return r; // คืนค่าเดิมหากไม่ตรงกับอะไรเลย
             };
 
             const getRoleLabel = (role) => {
@@ -8709,7 +9017,7 @@
             // --- ฟังก์ชันแก้ไขพฤติกรรมในตาราง ---
             const startEditBehavior = (b) => {
                 setEditingBehaviorId(b.id);
-                setEditBehaviorData({ ...b, role: b.role || '' });
+                setEditBehaviorData({ ...b, role: getRoleValue(b.role) }); // ดึงค่า Role เดิมมาแสดงให้ถูกต้อง
             };
 
             const saveEditBehavior = () => {
@@ -8857,7 +9165,7 @@
                 <div className="space-y-6">
                     {/* เมนู Dropdown เลือกรายการตั้งค่า */}
                     <div className="bg-white p-6 rounded-xl shadow-sm flex flex-col md:flex-row items-center justify-between gap-4 border-l-4 border-ns-blue">
-                        <h2 c lassName="text-xl font-bold text-ns-blue"><i className="fa-solid fa-cogs mr-2"></i> เลือกรายการที่ต้องการตั้งค่า</h2>
+                        <h2 className="text-xl font-bold text-ns-blue"><i className="fa-solid fa-cogs mr-2"></i> เลือกรายการที่ต้องการตั้งค่า</h2>
                         <select 
                             value={activeSettingTab} 
                             onChange={(e) => setActiveSettingTab(e.target.value)}
@@ -9155,7 +9463,6 @@
                                                                 onChange={e => setEditBehaviorData({...editBehaviorData, role: e.target.value})} 
                                                                 className="border rounded p-1 text-sm w-full outline-none focus:ring-2 focus:ring-ns-blue"
                                                             >
-                                                                <option value="" disabled>-- ไม่พบข้อมูล --</option>
                                                                 <option value="all">ทุกคน</option>
                                                                 <option value="admin">แอดมิน</option>
                                                                 <option value="dept_admin">แอดมินกลุ่มสาระ</option>
@@ -11014,7 +11321,7 @@
                 return acc;
             }, []);
 
-            const standardDepts = ['วิทยาศาสตร์และเทคโนโลยี', 'คณิตศาสตร์', 'ภาษาไทย', 'ภาษาต่างประเทศ', 'สังคมศึกษา ศาสนาและวัฒนธรรม', 'การงานอาชีพ', 'สุขศึกษาและพลศึกษา', 'ศิลปะ'];
+            const standardDepts = ['วิทยาศาสตร์และเทคโนโลยี', 'คณิตศาสตร์', 'ภาษาไทย', 'ภาษาต่างประเทศ', 'สังคมศึกษา ศาสนาและวัฒนธรรม', 'การงานอาชีพ', 'สุขศึกษาและพลศึกษา', 'ศิลปะ', 'แนะแนว'];
             const uniqueDepts = [...new Set([...standardDepts, ...(teachers || []).map(t => t.department).filter(Boolean)])].sort();
             
             const filteredTeachersByDept = (teachers || [])
@@ -12976,9 +13283,9 @@
                 setFormData(prev => ({ ...prev, clubCode: nextCode }));
             };
 
-            const standardDepts = ['วิทยาศาสตร์และเทคโนโลยี', 'คณิตศาสตร์', 'ภาษาไทย', 'ภาษาต่างประเทศ', 'สังคมศึกษา ศาสนาและวัฒนธรรม', 'การงานอาชีพ', 'สุขศึกษาและพลศึกษา', 'ศิลปะ'];
-            const departments = [...new Set([...standardDepts, ...(teachers || []).map(t => t.department).filter(Boolean)])].sort();
-            const filteredTeachers = (teachers || []).filter(t => selectedDept ? t.department === selectedDept : true).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+            const standardDepts = ['วิทยาศาสตร์และเทคโนโลยี', 'คณิตศาสตร์', 'ภาษาไทย', 'ภาษาต่างประเทศ', 'สังคมศึกษา ศาสนาและวัฒนธรรม', 'การงานอาชีพ', 'สุขศึกษาและพลศึกษา', 'ศิลปะ', 'แนะแนว'];
+            const departments = [...new Set([...standardDepts, ...(teachers || []).map(t => String(t.department || '').trim()).filter(Boolean)])].sort();
+            const filteredTeachers = (teachers || []).filter(t => selectedDept ? String(t.department || '').trim() === String(selectedDept).trim() : true).sort((a, b) => String(a.name).localeCompare(String(b.name)));
 
             const toggleTeacher = (tName) => {
                 if (selectedTeachers.includes(tName)) {
