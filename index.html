@@ -14517,10 +14517,11 @@
                     }
 
                     let loadedStudents = [];
-                    if (directSheetStudentsRes.status === 'fulfilled' && directSheetStudentsRes.value && directSheetStudentsRes.value.length > 0) {
+                    // 👇 สลับความสำคัญ: ดึงข้อมูลสดจากระบบหลังบ้าน (GAS) เป็นหลัก เพื่อทำลายปัญหาแคชค้าง ห้องมาไม่ครบ 👇
+                    if (studentsRes.status === 'fulfilled' && studentsRes.value && studentsRes.value.status === 'success' && studentsRes.value.data && studentsRes.value.data.length > 0) {
+                        loadedStudents = studentsRes.value.data;
+                    } else if (directSheetStudentsRes.status === 'fulfilled' && directSheetStudentsRes.value && directSheetStudentsRes.value.length > 0) {
                         loadedStudents = directSheetStudentsRes.value;
-                    } else if (studentsRes.status === 'fulfilled' && studentsRes.value && studentsRes.value.status === 'success') {
-                        loadedStudents = studentsRes.value.data || [];
                     }
                     
                     // 💡 ระบบทำความสะอาดข้อมูลชั้นและห้อง ป้องกันปัญหาครูพิมพ์เว้นวรรคผิด, ใส่เลข 0 นำหน้า หรือลืมพิมพ์คำว่า ม.
