@@ -7552,9 +7552,17 @@
                                 return isSubjectMatch && isRoomMatch;
                             });
                             
-                            matchedStudents = (students || []).filter(s => 
-                                subjectRegis.some(r => String(r.studentId).trim() === String(s.code).trim())
-                            ).sort((a,b) => Number(a.code) - Number(b.code));
+                            matchedStudents = (students || []).filter(s => {
+                                // 💡 แก้ไข: เพิ่มเงื่อนไขบังคับให้ดึงเฉพาะเด็กที่ "อยู่ตรงกับห้องในตารางสอนคาบนี้" เท่านั้น
+                                const sFullRoom = s.classLevel && s.room ? `${s.classLevel}/${s.room}` : '';
+                                const isInScheduleRoom = scheduleRooms.includes(sFullRoom) || scheduleRooms.includes(s.classLevel) || scheduleRooms.includes(s.room);
+                                
+                                // ถ้าเด็กคนนี้ไม่ได้อยู่ห้องที่กำหนดในตารางสอนคาบนี้ ให้ตัดรายชื่อทิ้งทันที
+                                if (!isInScheduleRoom && scheduleRooms.length > 0) return false;
+
+                                // ตรวจสอบขั้นสุดท้ายว่าเด็กคนนี้อยู่ในกลุ่มที่ลงทะเบียนไว้หรือไม่
+                                return subjectRegis.some(r => String(r.studentId).trim() === String(s.code).trim());
+                            }).sort((a,b) => Number(a.code) - Number(b.code));
                         }
                         
                         setTargetStudents(matchedStudents);
@@ -8365,7 +8373,6 @@
                                         </thead>
                                         <tbody className="divide-y divide-gray-200 bg-white">
                                             {targetStudents.length > 0 ? (() => {
-                                                const hasMultipleRooms = activeSubject && String(activeSubject.room).includes(',');
                                                 const groupedStudents = {};
                                                 
                                                 // จัดกลุ่มนักเรียนตามชั้น/ห้อง
@@ -8378,6 +8385,9 @@
                                                 // เรียงลำดับห้องจากน้อยไปมาก
                                                 const sortedRooms = Object.keys(groupedStudents).sort((a, b) => a.localeCompare(b, 'th', { numeric: true }));
                                                 
+                                                // 💡 แก้ไข: ใช้ความยาวของ sortedRooms ในการตรวจสอบว่ามีหลายห้องหรือไม่ แทนการหาเครื่องหมายลูกน้ำ
+                                                const hasMultipleRooms = sortedRooms.length > 1;
+
                                                 return sortedRooms.map(roomKey => (
                                                     <React.Fragment key={roomKey}>
                                                         {/* แถบแยกหมวดหมู่ชั้น/ห้อง (แสดงเฉพาะกรณีมีหลายห้องเรียนรวมกัน) */}
@@ -11545,23 +11555,45 @@
                         return false;
                     };
 
-                    const subjectRegis = (registrations || []).filter(r =>
-                        String(r.subjectCode).trim() === cleanTargetCode &&
-                        normalizeRoomStr(r.room) === cleanTargetRoom
-                    );
+                    // 💡 แก้ไข: ระบบกรองรายวิชาที่ลงทะเบียน ให้รองรับการลงทะเบียนแบบควบรวมหลายห้อง (Comma Separated)
+                    const subjectRegis = (registrations || []).filter(r => {
+                        const isSubjectMatch = String(r.subjectCode).trim() === cleanTargetCode;
+                        
+                        // แตกห้องที่รวมกันด้วยลูกน้ำออกมาเช็ค
+                        const rRooms = String(r.room).split(',').map(x => normalizeRoomStr(x));
+                        const isRoomMatch = rRooms.includes(cleanTargetRoom) || normalizeRoomStr(r.room) === cleanTargetRoom;
+                        
+                        // เช็คชื่อครูให้ตรงด้วย ป้องกันวิชาเดียวกันแต่ครูคนละคน
+                        const rTeacherNorm = normalizeName(r.teacherName);
+                        const tTeacherNorm = normalizeName(teacher);
+                        const isTeacherMatch = !teacher || (rTeacherNorm === tTeacherNorm) || (rTeacherNorm && tTeacherNorm && rTeacherNorm.includes(tTeacherNorm));
+
+                        return isSubjectMatch && isRoomMatch && isTeacherMatch;
+                    });
 
                     const cLevel = String(room).split('/')[0] ? String(room).split('/')[0].trim() : '';
                     const cRoom = String(room).split('/')[1] ? String(room).split('/')[1].trim() : '';
                     
-                    let matchedStudents = (students || []).filter(s => {
-                        const sRoom = normalizeRoomStr(`${s.classLevel || ''}/${s.room || ''}`);
-                        return sRoom === cleanTargetRoom || (s.classLevel === cLevel && s.room === cRoom);
-                    }).sort((a,b) => Number(a.code) - Number(b.code));
+                    let matchedStudents = [];
 
                     if (subjectRegis.length > 0) {
-                        matchedStudents = matchedStudents.filter(s =>
-                            subjectRegis.some(r => isMatchId(r.studentId, s.code))
-                        );
+                        // 💡 แก้ไข: ในหน้ารายงาน ดึงเฉพาะนักเรียนในห้องเป้าหมาย (ป้องกันรายชื่อห้องอื่นปนเข้ามา)
+                        const targetRoomsArr = String(room).split(',').map(x => x.trim()).filter(Boolean);
+
+                        matchedStudents = (students || []).filter(s => {
+                            const sFullRoom = s.classLevel && s.room ? `${s.classLevel}/${s.room}` : '';
+                            const isInTargetRoom = targetRoomsArr.includes(sFullRoom) || targetRoomsArr.includes(s.classLevel) || targetRoomsArr.includes(s.room);
+                            
+                            if (!isInTargetRoom && targetRoomsArr.length > 0) return false;
+
+                            return subjectRegis.some(r => isMatchId(r.studentId, s.code));
+                        }).sort((a,b) => Number(a.code) - Number(b.code));
+                    } else {
+                        // หากไม่มีการลงทะเบียน ให้ดึงเด็กจากห้องปกติมาแสดง (Fallback)
+                        matchedStudents = (students || []).filter(s => {
+                            const sRoom = normalizeRoomStr(`${s.classLevel || ''}/${s.room || ''}`);
+                            return sRoom === cleanTargetRoom || (s.classLevel === cLevel && s.room === cRoom);
+                        }).sort((a,b) => Number(a.code) - Number(b.code));
                     }
 
                     if (matchedStudents.length === 0 && records.length > 0) {
@@ -12704,27 +12736,52 @@
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            {attReportData.length > 0 ? attReportData.map((s, i) => (
-                                                <tr key={s.code} className="hover:bg-blue-50 transition border-b border-gray-200">
-                                                    <td className="p-2 border border-gray-300 text-center text-gray-500">{i+1}</td>
-                                                    <td className="p-2 border border-gray-300 text-center">{s.code}</td>
-                                                    <td className="p-2 border border-gray-300 text-left font-medium">{s.name}</td>
-                                                    {attUniqueDates.map((dateStr, idx) => {
-                                                        const status = s.attendance[dateStr] || '';
-                                                        const isRed = ['ข', 'น'].includes(status);
-                                                        const isGreen = ['✓'].includes(status);
-                                                        const isOrange = ['ส'].includes(status);
-                                                        return (
-                                                            <td key={idx} className={`p-2 border border-gray-300 text-center font-bold ${isRed ? 'text-red-500' : isGreen ? 'text-green-600' : isOrange ? 'text-orange-500' : 'text-blue-500'}`}>
-                                                                {status}
-                                                            </td>
-                                                        );
-                                                    })}
-                                                    <td className="p-2 border border-gray-300 text-center font-bold text-ns-blue bg-blue-50 print:bg-transparent">
-                                                        {s.percent}%
-                                                    </td>
-                                                </tr>
-                                            )) : (
+                                            {attReportData.length > 0 ? (() => {
+                                                const groupedStudents = {};
+                                                
+                                                // จัดกลุ่มนักเรียนสำหรับหน้ารายงาน
+                                                attReportData.forEach(s => {
+                                                    const roomKey = `${s.classLevel || ''}/${s.room || ''}`;
+                                                    if (!groupedStudents[roomKey]) groupedStudents[roomKey] = [];
+                                                    groupedStudents[roomKey].push(s);
+                                                });
+                                                
+                                                const sortedRooms = Object.keys(groupedStudents).sort((a, b) => a.localeCompare(b, 'th', { numeric: true }));
+                                                const hasMultipleRooms = sortedRooms.length > 1;
+
+                                                return sortedRooms.map(roomKey => (
+                                                    <React.Fragment key={roomKey}>
+                                                        {hasMultipleRooms && (
+                                                            <tr className="bg-indigo-50 border-b border-indigo-200">
+                                                                <td colSpan={4 + attUniqueDates.length} className="p-2 font-bold text-indigo-800 text-left">
+                                                                    <i className="fa-solid fa-users-rectangle mr-2"></i> ชั้น/ห้อง: {roomKey} <span className="text-gray-500 font-normal ml-2">({groupedStudents[roomKey].length} คน)</span>
+                                                                </td>
+                                                            </tr>
+                                                        )}
+                                                        {groupedStudents[roomKey].map((s, i) => (
+                                                            <tr key={s.code} className="hover:bg-blue-50 transition border-b border-gray-200">
+                                                                <td className="p-2 border border-gray-300 text-center text-gray-500">{i+1}</td>
+                                                                <td className="p-2 border border-gray-300 text-center">{s.code}</td>
+                                                                <td className="p-2 border border-gray-300 text-left font-medium">{s.name}</td>
+                                                                {attUniqueDates.map((dateStr, idx) => {
+                                                                    const status = s.attendance[dateStr] || '';
+                                                                    const isRed = ['ข', 'น'].includes(status);
+                                                                    const isGreen = ['✓'].includes(status);
+                                                                    const isOrange = ['ส'].includes(status);
+                                                                    return (
+                                                                        <td key={idx} className={`p-2 border border-gray-300 text-center font-bold ${isRed ? 'text-red-500' : isGreen ? 'text-green-600' : isOrange ? 'text-orange-500' : 'text-blue-500'}`}>
+                                                                            {status}
+                                                                        </td>
+                                                                    );
+                                                                })}
+                                                                <td className="p-2 border border-gray-300 text-center font-bold text-ns-blue bg-blue-50 print:bg-transparent">
+                                                                    {s.percent}%
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                    </React.Fragment>
+                                                ));
+                                            })() : (
                                                 <tr>
                                                     <td colSpan={4 + attUniqueDates.length} className="p-8 text-center text-gray-400">
                                                         {attSelectedKey ? (isFetchingAtt ? 'กำลังดึงข้อมูล...' : 'ไม่พบข้อมูลการเช็คชื่อสำหรับวิชานี้') : 'กรุณาเลือกรายวิชาเพื่อดูรายงาน'}
@@ -14939,11 +14996,14 @@
                                     <h1 className="text-2xl font-bold text-gray-800">
                                         {(menus.find(m => m.id === currentView) || {}).label || 'หน้าแรก'}
                                     </h1>
-                                    <div className="hidden md:block">
+                                    <div className="hidden md:flex gap-3 items-center">
                                         {isSyncing ? (
-                                            <span className="text-sm text-gray-500 animate-pulse"><i className="fa-solid fa-sync fa-spin mr-2"></i>กำลังซิงค์ข้อมูลกับฐานข้อมูล...</span>
+                                            <span className="text-sm text-gray-500 animate-pulse"><i className="fa-solid fa-sync fa-spin mr-2"></i>กำลังซิงค์ข้อมูล...</span>
                                         ) : (
-                                            <button onClick={syncGlobalData} className="text-sm text-gray-400 hover:text-ns-blue transition"><i className="fa-solid fa-rotate-right mr-1"></i>อัปเดตข้อมูล</button>
+                                            <React.Fragment>
+                                                <button onClick={syncGlobalData} className="text-sm bg-blue-50 text-ns-blue hover:bg-blue-100 px-4 py-2 rounded-lg font-bold transition shadow-sm border border-blue-200"><i className="fa-solid fa-rotate-right mr-1"></i>อัปเดตข้อมูล</button>
+                                                <button onClick={() => { sessionStorage.clear(); window.location.reload(); }} className="text-sm bg-red-50 text-red-600 hover:bg-red-100 px-4 py-2 rounded-lg font-bold transition shadow-sm border border-red-200" title="กดเมื่อข้อมูลไม่ยอมอัปเดต"><i className="fa-solid fa-broom mr-1"></i>ล้างแคช</button>
+                                            </React.Fragment>
                                         )}
                                     </div>
                                 </div>
