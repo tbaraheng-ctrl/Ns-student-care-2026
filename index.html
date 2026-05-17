@@ -6239,12 +6239,45 @@
             
             const uniqueSubjects = [];
             const subSet = new Set();
+            // อัปเดตรายการคีย์เวิร์ดที่ต้องการซ่อนตามที่ผู้ใช้ระบุ
+            const excludedSubjectKeywords = [
+                'ชุมนุม', 'จริยธรรม', 'ลูกเสือ', 'ยุวกาชาด', 'การเรียนรู้อิสระ', 
+                'ประกลุ่มสาระ', 'ประชุมกลุ่มสาระ', 'ประชุมฝ่ายบริหารวิชาการ', 
+                'ประชุมบริหารบุคคล', 'ประชุมฝ่ายปกครอง', 'ชุมชุน', 'ประชุมฝ่ายบริหาร'
+            ];
+
             teacherSchedules.forEach(s => {
+                // กรองวิชาที่ไม่อยากให้แสดงตามคีย์เวิร์ด
+                if (excludedSubjectKeywords.some(ex => (s.subjectName || '').includes(ex))) return;
+                
+                // กรองวิชาที่ไม่มีรหัสวิชาออก (เช่น ค่าว่าง หรือ '-')
+                if (!s.subjectCode || String(s.subjectCode).trim() === '' || String(s.subjectCode).trim() === '-') return;
+
                 const k = `${s.subjectCode}_${s.subjectName}`;
-                // แก้ไข: อนุญาตให้แสดงวิชาที่ไม่มีรหัสวิชาได้ (ขอแค่มีชื่อวิชาก็พอ)
+                
                 if (!subSet.has(k) && s.subjectName) {
-                    subSet.add(k);
-                    uniqueSubjects.push({ code: s.subjectCode, name: s.subjectName });
+                    
+                    // หาว่าวิชานี้มีห้องอะไรบ้างที่ครูคนนี้สอน
+                    const roomsForThisSubject = teacherSchedules
+                        .filter(ts => ts.subjectCode === s.subjectCode && ts.subjectName === s.subjectName)
+                        .map(ts => ts.room);
+                    const uniqueRoomsForThisSubject = [...new Set(roomsForThisSubject)];
+                    
+                    // เช็คว่ามีห้องไหนที่ "ยังไม่ได้ลงทะเบียน" อยู่บ้าง
+                    const unregisteredRooms = uniqueRoomsForThisSubject.filter(room => {
+                        return !(records || []).some(r => {
+                            const recordRooms = String(r.room || '').split(',').map(x => x.trim());
+                            return r.subjectCode === s.subjectCode && recordRooms.includes(room) && r.teacherName === selectedTeacher;
+                        });
+                    });
+
+                    const isCurrentlyEditingThis = isEditing && selectedSubjectObj && selectedSubjectObj.code === s.subjectCode;
+                    
+                    // จะเพิ่มวิชานี้ใน Dropdown ก็ต่อเมื่อยังมีห้องเหลือให้ลงทะเบียน หรือกำลังอยู่ในโหมดแก้ไขวิชานี้
+                    if (unregisteredRooms.length > 0 || isCurrentlyEditingThis) {
+                        subSet.add(k);
+                        uniqueSubjects.push({ code: s.subjectCode, name: s.subjectName });
+                    }
                 }
             });
 
@@ -6261,11 +6294,12 @@
                 
                 // กรองเฉพาะห้องที่ยังไม่ได้ลงทะเบียน หรือเป็นห้องที่กำลังแก้ไขอยู่
                 availableUniqueRooms = uniqueRooms.filter(room => {
-                    const isRegistered = (records || []).some(r => 
-                        r.subjectCode === selectedSubjectObj.code && 
-                        r.room === room && 
-                        r.teacherName === selectedTeacher
-                    );
+                    const isRegistered = (records || []).some(r => {
+                        const recordRooms = String(r.room || '').split(',').map(x => x.trim());
+                        return r.subjectCode === selectedSubjectObj.code && 
+                               recordRooms.includes(room) && 
+                               r.teacherName === selectedTeacher;
+                    });
                     
                     // หากกำลังแก้ไขข้อมูลห้องนี้อยู่ ให้แสดงห้องนี้ในตัวเลือกด้วย
                     if (isEditing && selectedRooms.includes(room)) {
@@ -6297,11 +6331,12 @@
                     let hasExisting = false;
                     
                     newSelectedRooms.forEach(r => {
-                         const existingRegs = records.filter(rec => 
-                            rec.subjectCode === selectedSubjectObj.code && 
-                            rec.room === r && 
-                            rec.teacherName === selectedTeacher
-                        );
+                         const existingRegs = records.filter(rec => {
+                            const recRooms = String(rec.room || '').split(',').map(x => x.trim());
+                            return rec.subjectCode === selectedSubjectObj.code && 
+                                   recRooms.includes(r) && 
+                                   rec.teacherName === selectedTeacher;
+                        });
                         if(existingRegs.length > 0) {
                             hasExisting = true;
                             existingRegs.forEach(rec => {
@@ -6387,7 +6422,7 @@
                     // ลบ record เก่าที่ตรงกับวิชา ครู และห้องที่กำลังบันทึก (เพื่อลงทับ)
                     let newRecords = [...records];
                     selectedRooms.forEach(r => {
-                         newRecords = newRecords.filter(rec => !(rec.subjectCode === payload.subjectCode && rec.room === r && rec.teacherName === payload.teacherName));
+                         newRecords = newRecords.filter(rec => !(rec.subjectCode === payload.subjectCode && String(rec.room||'').split(',').map(x=>x.trim()).includes(r) && rec.teacherName === payload.teacherName));
                     });
                     // ลบแบบรวมห้องด้วย เผื่อมี
                     newRecords = newRecords.filter(rec => !(rec.subjectCode === payload.subjectCode && rec.room === combinedRoomsStr && rec.teacherName === payload.teacherName));
@@ -6489,11 +6524,21 @@
                 // 1. ดึงวิชาทั้งหมดที่ต้องสอนจาก allSchedules
                 const requiredClasses = [];
                 const classMap = new Set();
+                // อัปเดตรายการคีย์เวิร์ดที่ต้องการซ่อนให้ตรงกัน
+                const excludedSubjectKeywords = [
+                    'ชุมนุม', 'จริยธรรม', 'ลูกเสือ', 'ยุวกาชาด', 'การเรียนรู้อิสระ', 
+                    'ประกลุ่มสาระ', 'ประชุมกลุ่มสาระ', 'ประชุมฝ่ายบริหารวิชาการ', 
+                    'ประชุมบริหารบุคคล', 'ประชุมฝ่ายปกครอง', 'ชุมชุน', 'ประชุมฝ่ายบริหาร'
+                ];
                 
                 allSchedules.forEach(s => {
                     const tNameNorm = normalizeName(s.teacherName);
-                    // ข้ามถ้าข้อมูลไม่ครบ
-                    if (!s.subjectCode || !s.room || !tNameNorm) return;
+                    
+                    // ข้ามถ้าข้อมูลไม่ครบ หรือ "ไม่มีรหัสวิชา"
+                    if (!s.subjectCode || String(s.subjectCode).trim() === '' || String(s.subjectCode).trim() === '-' || !s.room || !tNameNorm) return;
+                    
+                    // ข้ามวิชาที่ไม่ต้องการแสดงตามคีย์เวิร์ด
+                    if (excludedSubjectKeywords.some(ex => (s.subjectName || '').includes(ex))) return;
                     
                     const key = `${s.subjectCode}_${s.room}_${tNameNorm}`;
                     if (!classMap.has(key)) {
@@ -6518,7 +6563,7 @@
                 const registeredMap = new Set();
                 (records || []).forEach(r => {
                     // ประยุกต์ให้รองรับชื่อห้องแบบรวบกัน เช่น "ม.1/1, ม.1/2"
-                    const rRooms = r.room.split(',').map(x => x.trim());
+                    const rRooms = String(r.room || '').split(',').map(x => x.trim());
                     rRooms.forEach(splitRoom => {
                          registeredMap.add(`${r.subjectCode}_${splitRoom}_${normalizeName(r.teacherName)}`);
                     });
