@@ -400,7 +400,7 @@
             );
         };
 
-        // 2. หน้าสแกนเวลาเข้า-ออก
+       // 2. หน้าสแกนเวลาเข้า-ออก
         const ScannerPopup = ({ onClose, timeSettings, onRecordSaved, records, currentGps, studentList, schoolConfig, behaviorsSetting, behaviorRecords, setBehaviorRecords, user, exemptions }) => {
             const [status, setStatus] = useState("กำลังเตรียมกล้อง...");
             const [scanResult, setScanResult] = useState(null);
@@ -660,29 +660,123 @@
                 }
             };
 
+            // 👇 แก้ไขปรับปรุงระบบการเรียกกล้องให้กระตุ้นการขออนุญาต (Permission) อัตโนมัติ
             useEffect(() => {
-                const scanner = new Html5Qrcode("reader");
-                const config = { fps: 10, qrbox: { width: 250, height: 250 } };
-                
-                if (currentGps) {
-                    const dist = getDistanceFromLatLonInM(
-                        currentGps.lat, currentGps.lng,
-                        parseFloat(latestTimeSettings.current.gpsLat), parseFloat(latestTimeSettings.current.gpsLng)
-                    );
-                    if (dist <= 200) {
-                        setStatus("พร้อมสแกนคิวอาร์โค้ด");
+                let scanner = null;
+                let isUnmounted = false;
+
+                const initCamera = async () => {
+                    if (isUnmounted) return;
+                    
+                    // 1. กระตุ้นให้เบราว์เซอร์เด้งหน้าต่าง "ขออนุญาตใช้กล้อง"
+                    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                        try {
+                            setStatus("กำลังขออนุญาตใช้กล้อง...");
+                            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } }).catch(async () => {
+                                // ถ้าขอกล้องหลังไม่ได้ ให้ขอกล้องอะไรก็ได้เพื่อกระตุ้น Permission
+                                return await navigator.mediaDevices.getUserMedia({ video: true });
+                            });
+                            // เมื่อได้สิทธิ์แล้ว ปิดสตรีมไปก่อนเพื่อส่งต่อให้ Html5Qrcode จัดการ
+                            if (stream) {
+                                stream.getTracks().forEach(track => track.stop());
+                            }
+                        } catch (permErr) {
+                            console.error("Camera Permission Error:", permErr);
+                            setStatus("กรุณาอนุญาตการเข้าถึงกล้องในเบราว์เซอร์ (Settings > Site Settings)");
+                            return; // หยุดการทำงานถ้าผู้ใช้ไม่อนุญาต
+                        }
                     } else {
-                        setStatus(`คุณอยู่นอกพื้นที่โรงเรียน (ระยะห่าง ${Math.round(dist)} เมตร)`);
+                        setStatus("เบราว์เซอร์ไม่รองรับ หรือไม่ได้ใช้งานผ่าน HTTPS");
+                        return;
                     }
+
+                    try {
+                        scanner = new window.Html5Qrcode("reader");
+                        
+                        // ปรับ config ให้กรอบโฟกัส (qrbox) ขยายกว้างเกือบเท่ากรอบกล้อง (95%)
+                        const config = { 
+                            fps: 10, 
+                            qrbox: (viewfinderWidth, viewfinderHeight) => {
+                                const minEdgeSize = Math.min(viewfinderWidth, viewfinderHeight);
+                                return {
+                                    width: Math.floor(minEdgeSize * 0.95),
+                                    height: Math.floor(minEdgeSize * 0.95)
+                                };
+                            },
+                            aspectRatio: 1.0 // บังคับสัดส่วนวิดีโอให้เป็นสี่เหลี่ยมจัตุรัสเพื่อให้พอดีกับ UI
+                        };
+                        
+                        if (currentGps) {
+                            const dist = getDistanceFromLatLonInM(
+                                currentGps.lat, currentGps.lng,
+                                parseFloat(latestTimeSettings.current.gpsLat), parseFloat(latestTimeSettings.current.gpsLng)
+                            );
+                            if (dist <= 200) {
+                                setStatus("พร้อมสแกนคิวอาร์โค้ด");
+                            } else {
+                                setStatus(`คุณอยู่นอกพื้นที่โรงเรียน (ระยะห่าง ${Math.round(dist)} เมตร)`);
+                            }
+                        } else {
+                            setStatus("พร้อมสแกนคิวอาร์โค้ด");
+                        }
+
+                        try {
+                            // ลองเปิดกล้องหลังก่อน
+                            await scanner.start({ facingMode: "environment" }, config, 
+                                (decodedText) => processScanData(decodedText),
+                                (err) => {}
+                            );
+                        } catch (envError) {
+                            console.warn("ไม่สามารถดึงกล้องหลังได้โดยตรง กำลังสลับไปค้นหารายชื่อกล้อง...", envError);
+                            if (isUnmounted) return;
+                            
+                            // ระบบสำรอง: ค้นหากล้องทั้งหมดในเครื่อง
+                            try {
+                                const devices = await window.Html5Qrcode.getCameras();
+                                if (devices && devices.length > 0) {
+                                    // สำหรับ Android มักจะเจอกล้องหลังเป็นตัวที่อยู่ท้ายสุดของ Array (เลนส์หลัก)
+                                    const backCameraId = devices.length > 1 ? devices[devices.length - 1].id : devices[0].id;
+                                    await scanner.start(backCameraId, config, 
+                                        (decodedText) => processScanData(decodedText),
+                                        (err) => {}
+                                    );
+                                } else {
+                                    throw new Error("ไม่พบอุปกรณ์กล้อง");
+                                }
+                            } catch (fallbackError) {
+                                setStatus("ไม่สามารถเปิดกล้องได้ กรุณารีเฟรชเบราว์เซอร์");
+                            }
+                        }
+                    } catch (error) {
+                        console.error("Camera Init Error:", error);
+                        setStatus("เกิดข้อผิดพลาดในการเตรียมกล้อง");
+                    }
+                };
+
+                // ตรวจสอบว่ามีไลบรารีสแกนอยู่หรือไม่ หากไม่มีให้โหลดก่อน
+                if (!window.Html5Qrcode) {
+                    setStatus("กำลังโหลดระบบกล้อง...");
+                    const script = document.createElement('script');
+                    script.src = 'https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js';
+                    script.async = true;
+                    script.onload = () => {
+                        if (!isUnmounted) initCamera();
+                    };
+                    document.body.appendChild(script);
+                } else {
+                    initCamera();
                 }
 
-                scanner.start({ facingMode: "environment" }, config, 
-                    (decodedText) => processScanData(decodedText),
-                    (err) => {}
-                ).catch(err => setStatus("ไม่สามารถเปิดกล้องได้"));
-
-                return () => { scanner.stop().catch(e => console.log(e)); };
+                return () => { 
+                    isUnmounted = true;
+                    if (scanner) {
+                        try {
+                            scanner.stop().then(() => scanner.clear()).catch(e => console.log(e));
+                        } catch(e) {}
+                    }
+                };
             }, []);
+            // 👆 สิ้นสุดการแก้ไขระบบเรียกกล้อง
 
             return (
                 <div className="fixed inset-0 z-50 bg-gray-900 flex flex-col overflow-hidden h-full w-full">
@@ -814,7 +908,6 @@
                 </div>
             );
         };
-
         // 3. หน้าเวลาเข้า-ออกโรงเรียน (TimeView)
         const TimeView = ({ timeSettings, records, setRecords, forgotCardRecords, setForgotCardRecords, isSyncing, studentList, schoolConfig, behaviorsSetting, behaviorRecords, setBehaviorRecords, user, exemptions }) => {
             const [showScanner, setShowScanner] = useState(false);
@@ -7457,7 +7550,35 @@
                     }
 
                     const dayName = getDayNameTH(currentDate);
-                    let matchedSchedule = teacherSchedules.find(s => s.day === dayName && s.period === currentPeriod);
+                    
+                    // 💡 แก้ไข: ดึงตารางสอน "ทั้งหมด" ที่ตรงกับวันและคาบนี้ (รองรับสอนหลายวิชา/หลายห้องในคาบเดียว)
+                    const schedulesInPeriod = teacherSchedules.filter(s => s.day === dayName && s.period === currentPeriod);
+                    let matchedSchedule = null;
+
+                    if (schedulesInPeriod.length > 0) {
+                        // นำข้อมูลมารวมกันคั่นด้วยลูกน้ำ
+                        const uniqueSubCodes = [...new Set(schedulesInPeriod.map(s => String(s.subjectCode).trim()).filter(Boolean))].join(', ');
+                        const uniqueSubNames = [...new Set(schedulesInPeriod.map(s => String(s.subjectName).trim()).filter(Boolean))].join(', ');
+                        
+                        const allRooms = [];
+                        schedulesInPeriod.forEach(s => {
+                            if (s.room) {
+                                String(s.room).split(',').forEach(r => allRooms.push(r.trim()));
+                            }
+                        });
+                        const uniqueRooms = [...new Set(allRooms.filter(Boolean))].join(', ');
+
+                        // สร้าง Schedule รวมเพื่อนำไปแสดงผลบน Header และใช้ค้นหาข้อมูลต่อ
+                        matchedSchedule = {
+                            day: dayName,
+                            period: currentPeriod,
+                            subjectCode: uniqueSubCodes,
+                            subjectName: uniqueSubNames,
+                            teacherName: schedulesInPeriod[0].teacherName,
+                            room: uniqueRooms,
+                            _originalSchedules: schedulesInPeriod // เก็บข้อมูลต้นฉบับไว้เทียบรหัสวิชา
+                        };
+                    }
 
                     if (isPeriodZero && !matchedSchedule) {
                         const currentTeacher = (teachers || []).find(t => normalizeName(t.name) === normalizeName(user && user.name ? user.name : ''));
@@ -7481,7 +7602,8 @@
                             subjectCode: hrSubjectCode, 
                             subjectName: 'กิจกรรมหน้าเสาธง/โฮมรูม',
                             teacherName: user && user.name ? user.name : '',
-                            room: advRoomStr
+                            room: advRoomStr,
+                            _originalSchedules: []
                         };
                     }
 
@@ -7489,10 +7611,15 @@
                         setActiveSubject(matchedSchedule);
                         setScannedStudents([]); 
                         
+                        // ใช้รหัสวิชาของวิชาแรกในการหาคาบต่อเนื่อง เพื่อไม่ให้สับสนกรณีสอนหลายวิชา
+                        const primaryCode = matchedSchedule._originalSchedules && matchedSchedule._originalSchedules.length > 0 
+                            ? matchedSchedule._originalSchedules[0].subjectCode 
+                            : matchedSchedule.subjectCode;
+
                         const sameSubjectSchedules = teacherSchedules.filter(s => 
                             s.day === dayName && 
-                            s.subjectCode === matchedSchedule.subjectCode && 
-                            s.room === matchedSchedule.room
+                            s.subjectCode === primaryCode && 
+                            (matchedSchedule.room.includes(s.room) || s.room === matchedSchedule.room)
                         );
                         
                         const periodOrder = (periodSettings || []).map(p => String(p.period));
@@ -7536,19 +7663,28 @@
                                 const tRooms = String(currentTeacher.room).split(',').map(r => r.trim()).filter(Boolean);
                                 matchedStudents = (students || []).filter(s => {
                                     return String(s.classLevel).trim() === tClass && tRooms.includes(String(s.room).trim());
-                                }).sort((a,b) => Number(a.code) - Number(b.code));
+                                }).reverse(); // 💡 เพิ่ม .reverse() เพื่อพลิกรายชื่อกลับให้ตรงกับชีต (บนลงล่าง)
                             } else {
                                 matchedStudents = [];
                             }
                         } else {
-                            //แยกลูกน้ำ เพื่อดึงเด็กจากห้องที่ถูกรวมมาทั้งหมด
+                            // แยกลูกน้ำ เพื่อดึงเด็กจากห้องที่ถูกรวมมาทั้งหมด
                             const scheduleRooms = String(matchedSchedule.room).split(',').map(r => r.trim()).filter(Boolean);
                             
+                            // 💡 ดึงรหัสวิชาทั้งหมดที่สอนในคาบนี้
+                            const scheduleCodes = matchedSchedule._originalSchedules && matchedSchedule._originalSchedules.length > 0
+                                ? matchedSchedule._originalSchedules.map(s => String(s.subjectCode).trim()).filter(Boolean)
+                                : String(matchedSchedule.subjectCode).split(',').map(c => c.trim()).filter(Boolean);
+                            
                             const subjectRegis = (registrations || []).filter(r => {
-                                const isSubjectMatch = String(r.subjectCode).trim() === String(matchedSchedule.subjectCode).trim();
+                                const rCode = String(r.subjectCode).trim();
                                 const rRooms = String(r.room).split(',').map(x => x.trim()).filter(Boolean);
+                                
+                                // เช็คว่าวิชาตรงกับ 1 ในวิชาที่สอนในคาบนี้หรือไม่
+                                const isSubjectMatch = scheduleCodes.includes(rCode);
                                 // เช็คว่ามีห้องที่ตรงกันหรือไม่
-                                const isRoomMatch = scheduleRooms.some(sr => rRooms.includes(sr)) || String(r.room).trim() === String(matchedSchedule.room).trim();
+                                const isRoomMatch = scheduleRooms.some(sr => rRooms.includes(sr)) || scheduleRooms.includes(String(r.room).trim());
+                                
                                 return isSubjectMatch && isRoomMatch;
                             });
                             
@@ -7562,7 +7698,7 @@
 
                                 // ตรวจสอบขั้นสุดท้ายว่าเด็กคนนี้อยู่ในกลุ่มที่ลงทะเบียนไว้หรือไม่
                                 return subjectRegis.some(r => String(r.studentId).trim() === String(s.code).trim());
-                            }).sort((a,b) => Number(a.code) - Number(b.code));
+                            }).reverse(); // 💡 เพิ่ม .reverse() เพื่อพลิกรายชื่อกลับให้ตรงกับชีต (บนลงล่าง)
                         }
                         
                         setTargetStudents(matchedStudents);
@@ -11587,13 +11723,39 @@
                             if (!isInTargetRoom && targetRoomsArr.length > 0) return false;
 
                             return subjectRegis.some(r => isMatchId(r.studentId, s.code));
-                        }).sort((a,b) => Number(a.code) - Number(b.code));
+                        });
                     } else {
                         // หากไม่มีการลงทะเบียน ให้ดึงเด็กจากห้องปกติมาแสดง (Fallback)
                         matchedStudents = (students || []).filter(s => {
                             const sRoom = normalizeRoomStr(`${s.classLevel || ''}/${s.room || ''}`);
                             return sRoom === cleanTargetRoom || (s.classLevel === cLevel && s.room === cRoom);
-                        }).sort((a,b) => Number(a.code) - Number(b.code));
+                        });
+                    }
+
+                    if (matchedStudents.length === 0 && records.length > 0) {
+                        const findIdField = (rec) => {
+                            for (let k in rec) {
+                                if (k==='id'||k==='date'||k==='period') continue;
+                                const v = String(rec[k]).trim();
+                                if (!isNaN(v) && v.length >= 4) return k;
+                            }
+                            return 'studentId';
+                        };
+                        const idField = findIdField(records[0]);
+                        
+                        const uniqueStudentIds = [...new Set(records.map(r => String(r[idField]).trim()))];
+                        matchedStudents = uniqueStudentIds.map(id => {
+                            const rec = records.find(r => String(r[idField]).trim() === id);
+                            let nameField = 'name';
+                            for (let k in rec) {
+                                if (k==='id'||k==='date'||k==='period'||k===idField) continue;
+                                const v = String(rec[k]).trim();
+                                if (v.length > 5 && isNaN(v) && !['มา', 'สาย', 'ขาด', 'ลาป่วย', 'ลากิจ', 'ไปกิจกรรม', 'หนีเรียน'].includes(v)) {
+                                    nameField = k; break;
+                                }
+                            }
+                            return { code: id, name: rec[nameField] || 'ไม่มีชื่อ', classLevel: cLevel, room: cRoom };
+                        });
                     }
 
                     if (matchedStudents.length === 0 && records.length > 0) {
