@@ -2656,7 +2656,7 @@
 
                 processAutoAbsent();
             // eslint-disable-next-line react-hooks/exhaustive-deps
-            }, [pastActivities, students, isSyncing, leaveRecords]); // 💡 ให้ระบบตรวจสอบซ้ำทุกครั้งที่มีการเพิ่ม "แจ้งลา" (leaveRecords)
+            }, [pastActivities, students, isSyncing, leaveRecords]); // 💡 ให้ระบบตรวจสอบซ้ำทุกครั้งที่มีการดึงข้อมูลเสร็จ หรือเพิ่มการแจ้งลาใหม่
 
             const latestRecords = useRef(records);
             useEffect(() => { latestRecords.current = records; }, [records]);
@@ -5529,7 +5529,9 @@
             };
             
             const [inputDate, setInputDate] = useState(getTodayYMD());
+            const [leaveMode, setLeaveMode] = useState('เต็มวัน');
             const [leaveDays, setLeaveDays] = useState(1); // เพิ่ม State สำหรับจำนวนวันลา
+            const [selectedLeavePeriods, setSelectedLeavePeriods] = useState([]);
             const [selectedStudentIds, setSelectedStudentIds] = useState([]);
             const [leaveType, setLeaveType] = useState('ลาป่วย');
             const [cart, setCart] = useState([]);
@@ -5538,8 +5540,9 @@
             const [deletingRecordId, setDeletingRecordId] = useState(null);
 
             // --- เพิ่ม State สำหรับกรองประวัติการลา ---
-            const [historyDateFilter, setHistoryDateFilter] = useState('today');
+            const [historyDateFilter, setHistoryDateFilter] = useState('all'); 
             const [historyCustomDate, setHistoryCustomDate] = useState(getTodayYMD());
+            // ลบการกรองชั้นห้องในประวัติออกตามที่ต้องการ
 
             const getBEStrSafeLocal = (d) => {
                 const day = String(d.getDate()).padStart(2, '0');
@@ -5560,17 +5563,23 @@
                 setSelectedStudentIds(prev => prev.includes(code) ? prev.filter(id => id !== code) : [...prev, code]);
             };
 
+            const toggleLeavePeriod = (p) => {
+                setSelectedLeavePeriods(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p]);
+            };
+
             const addToCart = () => {
                 if (selectedStudentIds.length === 0) return alert('กรุณาเลือกนักเรียนอย่างน้อย 1 คน');
                 if (!inputDate) return alert('กรุณาเลือกวันที่');
                 if (!selectedClass || !selectedRoom) return alert('กรุณาเลือกชั้นและห้องเรียน');
-                if (leaveDays < 1) return alert('จำนวนวันลาต้องอย่างน้อย 1 วัน');
+                if (leaveMode === 'เต็มวัน' && leaveDays < 1) return alert('จำนวนวันลาต้องอย่างน้อย 1 วัน');
+                if (leaveMode === 'รายคาบ' && selectedLeavePeriods.length === 0) return alert('กรุณาเลือกคาบเรียนอย่างน้อย 1 คาบ');
 
                 let newCartItems = [];
                 const baseDate = new Date(inputDate);
+                const loopDays = leaveMode === 'เต็มวัน' ? leaveDays : 1;
 
                 // วนลูปสร้างรายการตามจำนวนวันลาที่ระบุ
-                for (let i = 0; i < leaveDays; i++) {
+                for (let i = 0; i < loopDays; i++) {
                     const currentLeaveDate = new Date(baseDate);
                     currentLeaveDate.setDate(currentLeaveDate.getDate() + i);
 
@@ -5590,6 +5599,7 @@
                             name: stu.name,
                             room: `${stu.classLevel}/${stu.room}`,
                             leaveType: leaveType,
+                            leavePeriods: leaveMode === 'รายคาบ' ? JSON.stringify(selectedLeavePeriods) : '',
                             recorder: (user && user.name) ? user.name : 'Admin'
                         };
                     });
@@ -5599,6 +5609,7 @@
                 setCart(prev => [...prev, ...newCartItems]);
                 setSelectedStudentIds([]); 
                 setLeaveDays(1); // รีเซ็ตจำนวนวันกลับเป็น 1 วันอัตโนมัติ
+                setSelectedLeavePeriods([]);
             };
 
             const removeFromCart = (tempId) => {
@@ -5636,29 +5647,44 @@
                 setIsProcessing(false);
             };
 
-            // ดึงประวัติการลาเฉพาะห้องที่เลือก และ กรองตามวันที่เลือก
+            // 💡 [แก้ไข] ดึงประวัติการลาเฉพาะห้องที่ตนเองเป็นที่ปรึกษา โดยค้นหาห้องจากฐานข้อมูลนักเรียน (อุดช่องโหว่ข้อมูลเก่าที่ไม่มีห้อง)
             const myLeaveRecords = (records || []).filter(r => {
-                // 1. กรองตามห้อง
-                if (selectedClass && selectedRoom) {
-                    if (String(r.room).trim() !== `${selectedClass}/${selectedRoom}`) return false;
+                const stu = (students || []).find(s => String(s.code).trim() === String(r.studentId).trim());
+                const rRoomFull = stu ? `${stu.classLevel}/${stu.room}` : String(r.room || '');
+                const recClass = rRoomFull.split('/')[0] ? rRoomFull.split('/')[0].trim() : '';
+                const recRoom = rRoomFull.split('/')[1] ? rRoomFull.split('/')[1].trim() : '';
+
+                // 1. ตรวจสอบสิทธิ์การเข้าถึงประวัติ (เฉพาะครูที่ปรึกษาเห็นเฉพาะห้องตัวเอง, แอดมินดูได้ทั้งหมด)
+                if (user && user.role !== 'admin' && user.role !== 'administrative' && user.role !== 'executive') {
+                    if (myTeacher && myTeacher.classLevel && myTeacher.room) {
+                        const myClass = String(myTeacher.classLevel).trim();
+                        const myRoom = String(myTeacher.room).trim();
+                        if (recClass !== myClass || recRoom !== myRoom) {
+                            return false; 
+                        }
+                    } else {
+                        return false; 
+                    }
                 }
                 
-                // 2. กรองตามวันที่
+                // 2. กรองตามวันที่ 
                 if (historyDateFilter !== 'all') {
                     const recordDate = formatDisplayDate(r.date);
                     const todayStr = getBEStrSafeLocal(new Date());
                     const yestStr = getBEStrSafeLocal(new Date(Date.now() - 86400000));
                     
-                    if (historyDateFilter === 'today') {
-                        if (recordDate !== todayStr) return false;
-                    } else if (historyDateFilter === 'yesterday') {
-                        if (recordDate !== yestStr) return false;
-                    } else if (historyDateFilter === 'custom') {
-                        if (recordDate !== formatDisplayDate(formatDateForDB(historyCustomDate))) return false;
-                    }
+                    if (historyDateFilter === 'today' && recordDate !== todayStr) return false;
+                    if (historyDateFilter === 'yesterday' && recordDate !== yestStr) return false;
+                    if (historyDateFilter === 'custom' && recordDate !== formatDisplayDate(formatDateForDB(historyCustomDate))) return false;
                 }
                 
                 return true; 
+            }).map(r => {
+                if (!r.room) {
+                    const stu = (students || []).find(s => String(s.code).trim() === String(r.studentId).trim());
+                    if (stu) r.room = `${stu.classLevel}/${stu.room}`;
+                }
+                return r;
             });
 
             // เพิ่มฟังก์ชันแก้ไขและลบ ที่หายไปกลับคืนมา
@@ -5726,14 +5752,44 @@
                                     <label className="block text-sm font-bold text-ns-blue mb-2">1. เลือกวันที่เริ่มลา, จำนวนวัน และ นักเรียน</label>
                                     
                                     <div className="flex flex-col md:flex-row gap-4 mb-4">
-                                        <div className="w-full md:w-1/2">
+                                        <div className="w-full md:w-1/3">
                                             <label className="block text-xs text-gray-600 mb-1">วันที่เริ่มต้นลา</label>
                                             <input type="date" value={inputDate} onChange={e=>setInputDate(e.target.value)} className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-ns-blue outline-none" />
                                         </div>
-                                        <div className="w-full md:w-1/2">
-                                            <label className="block text-xs text-gray-600 mb-1">จำนวนวันลา (วัน)</label>
-                                            <input type="number" min="1" max="30" value={leaveDays} onChange={e=>setLeaveDays(Number(e.target.value))} className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-ns-blue outline-none font-bold text-ns-blue" />
+                                        <div className="w-full md:w-1/3">
+                                            <label className="block text-xs text-gray-600 mb-1">รูปแบบการลา</label>
+                                            <select value={leaveMode} onChange={e=>setLeaveMode(e.target.value)} className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-ns-blue outline-none font-bold text-ns-blue">
+                                                <option value="เต็มวัน">เต็มวัน (ระบุจำนวนวัน)</option>
+                                                <option value="รายคาบ">ครึ่งวัน / รายคาบ</option>
+                                            </select>
                                         </div>
+                                        {leaveMode === 'เต็มวัน' ? (
+                                            <div className="w-full md:w-1/3 animate-[fadeIn_0.2s_ease-out]">
+                                                <label className="block text-xs text-gray-600 mb-1">จำนวนวันลา (วัน)</label>
+                                                <input type="number" min="1" max="30" value={leaveDays} onChange={e=>setLeaveDays(Number(e.target.value))} className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-ns-blue outline-none font-bold text-ns-blue" />
+                                            </div>
+                                        ) : (
+                                            <div className="w-full md:w-1/3 animate-[fadeIn_0.2s_ease-out]">
+                                                <label className="block text-xs text-gray-600 mb-1">เลือกคาบ (เลือกได้มากกว่า 1)</label>
+                                                <div className="relative">
+                                                    <button type="button" className="w-full border rounded-lg p-2 text-left bg-white focus:ring-2 focus:ring-ns-blue outline-none text-sm text-ns-blue font-bold flex justify-between items-center" onClick={(e) => {
+                                                        const el = e.currentTarget.nextElementSibling;
+                                                        el.classList.toggle('hidden');
+                                                    }}>
+                                                        {selectedLeavePeriods.length > 0 ? `เลือกแล้ว ${selectedLeavePeriods.length} คาบ` : '-- กดเลือกคาบ --'}
+                                                        <i className="fa-solid fa-caret-down"></i>
+                                                    </button>
+                                                    <div className="absolute top-full left-0 w-full mt-1 bg-white border rounded-lg shadow-lg z-50 p-3 hidden grid grid-cols-3 gap-2">
+                                                        {['1','2','3','4','5','6','7','8','9'].map(p => (
+                                                            <label key={p} className="flex items-center space-x-2 cursor-pointer p-2 hover:bg-blue-50 rounded border">
+                                                                <input type="checkbox" checked={selectedLeavePeriods.includes(p)} onChange={() => toggleLeavePeriod(p)} className="w-4 h-4 text-ns-blue rounded" />
+                                                                <span className="text-sm font-bold text-gray-700">คาบ {p}</span>
+                                                            </label>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
                                     
                                     <div className="max-h-60 overflow-y-auto bg-white border rounded-lg p-2 shadow-inner">
@@ -5792,7 +5848,7 @@
                                 <div className="overflow-x-auto mb-4">
                                     <table className="w-full text-sm text-left border">
                                         <thead className="bg-gray-100">
-                                            <tr><th className="p-2 border">วันที่</th><th className="p-2 border">รหัสประจำตัว</th><th className="p-2 border">ชื่อ-สกุล</th><th className="p-2 border text-center">ชั้น/ห้อง</th><th className="p-2 border text-center">ประเภท</th><th className="p-2 border text-center">จัดการ</th></tr>
+                                            <tr><th className="p-2 border">วันที่</th><th className="p-2 border">รหัสประจำตัว</th><th className="p-2 border">ชื่อ-สกุล</th><th className="p-2 border text-center">ชั้น/ห้อง</th><th className="p-2 border text-center">ประเภท</th><th className="p-2 border text-center">คาบที่ลา</th><th className="p-2 border text-center">จัดการ</th></tr>
                                         </thead>
                                         <tbody>
                                             {cart.map(item => (
@@ -5802,6 +5858,7 @@
                                                     <td className="p-2 border">{item.name}</td>
                                                     <td className="p-2 border text-center">{item.room}</td>
                                                     <td className="p-2 border text-center"><span className={`px-2 py-1 rounded text-xs font-bold text-white ${item.leaveType === 'ลาป่วย' ? 'bg-orange-500' : item.leaveType === 'ลากิจ' ? 'bg-purple-500' : 'bg-blue-500'}`}>{item.leaveType}</span></td>
+                                                    <td className="p-2 border text-center text-xs text-blue-600 font-bold">{item.leavePeriods ? (() => { try { const p = JSON.parse(item.leavePeriods); return p.length > 0 ? `คาบ ${p.join(', ')}` : 'เต็มวัน'; } catch(e) { return 'เต็มวัน'; } })() : 'เต็มวัน'}</td>
                                                     <td className="p-2 border text-center">
                                                         <button onClick={() => removeFromCart(item.tempId)} className="text-red-500 hover:text-red-700"><i className="fa-solid fa-trash"></i></button>
                                                     </td>
@@ -5823,12 +5880,12 @@
                     <div className="bg-white p-6 rounded-xl shadow-sm border-t-4 border-gray-600">
                         <div className="flex flex-col md:flex-row justify-between md:items-center mb-4 border-b pb-4 gap-4">
                             <h2 className="text-xl font-bold text-gray-800 flex items-center">
-                                <i className="fa-solid fa-list mr-2"></i> ประวัติการบันทึกแจ้งลา {selectedClass && selectedRoom ? `(ห้อง ${selectedClass}/${selectedRoom})` : '(ทั้งหมด)'}
+                                <i className="fa-solid fa-list mr-2"></i> ประวัติการบันทึกแจ้งลา
                                 {isSyncing && <span className="text-sm text-gray-500 animate-pulse ml-3"><i className="fa-solid fa-sync fa-spin"></i></span>}
                             </h2>
                             
                             <div className="flex flex-wrap items-center gap-3">
-                                <label className="text-sm font-bold text-gray-700">วันที่:</label>
+                                <label className="text-sm font-bold text-gray-700 ml-2">วันที่:</label>
                                 <select 
                                     value={historyDateFilter} 
                                     onChange={e => setHistoryDateFilter(e.target.value)}
@@ -5852,7 +5909,7 @@
                         <div className="overflow-x-auto">
                             <table className="w-full text-sm text-left">
                                 <thead className="bg-gray-100 text-gray-600">
-                                    <tr><th className="p-3 border-b">วันที่</th><th className="p-3 border-b">รหัสประจำตัว</th><th className="p-3 border-b">ชื่อ-สกุล</th><th className="p-3 text-center border-b">ชั้น/ห้อง</th><th className="p-3 text-center border-b">ประเภทการลา</th><th className="p-3 text-center border-b">ผู้บันทึก</th><th className="p-3 text-center border-b w-24">จัดการ</th></tr>
+                                    <tr><th className="p-3 border-b">วันที่</th><th className="p-3 border-b">รหัสประจำตัว</th><th className="p-3 border-b">ชื่อ-สกุล</th><th className="p-3 text-center border-b">ชั้น/ห้อง</th><th className="p-3 text-center border-b">ประเภทการลา</th><th className="p-3 text-center border-b">คาบที่ลา</th><th className="p-3 text-center border-b">ผู้บันทึก</th><th className="p-3 text-center border-b w-24">จัดการ</th></tr>
                                 </thead>
                                 <tbody>
                                     {myLeaveRecords.length > 0 ? myLeaveRecords.map(r => (
@@ -5862,13 +5919,36 @@
                                             <td className="p-3">{r.name}</td>
                                             <td className="p-3 text-center">{r.room || '-'}</td>
                                             <td className="p-3 text-center"><span className={`px-2 py-1 rounded text-xs font-bold text-white ${r.leaveType === 'ลาป่วย' ? 'bg-orange-500' : r.leaveType === 'ลากิจ' ? 'bg-purple-500' : 'bg-blue-500'}`}>{r.leaveType}</span></td>
+                                            <td className="p-3 text-center text-blue-600 text-xs font-bold">{r.leavePeriods ? (() => { try { const p = JSON.parse(r.leavePeriods); return p.length > 0 ? `คาบ ${p.join(', ')}` : 'เต็มวัน'; } catch(e) { return 'เต็มวัน'; } })() : 'เต็มวัน'}</td>
                                             <td className="p-3 text-center text-gray-500 text-xs">{r.recorder}</td>
                                             <td className="p-3 text-center space-x-2">
-                                                <button onClick={() => setEditingRecord({...r, inputDate: r.date.split('/').reverse().join('-')})} className="text-blue-500 hover:bg-blue-50 p-1.5 rounded"><i className="fa-solid fa-edit"></i></button>
-                                                <button onClick={() => setDeletingRecordId(r.id)} className="text-red-500 hover:bg-red-50 p-1.5 rounded"><i className="fa-solid fa-trash"></i></button>
+                                                <button onClick={() => {
+                                                    // 💡 [แก้ไข] ฟังก์ชันแปลงวันที่กลับเป็น YYYY-MM-DD แบบ ค.ศ. สำหรับช่อง input type="date"
+                                                    const parseToInput = (dStr) => {
+                                                        if (!dStr) return '';
+                                                        let s = String(dStr).trim();
+                                                        if (s.includes('T')) s = s.split('T')[0];
+                                                        if (s.includes('/')) {
+                                                            const parts = s.split('/');
+                                                            let y = Number(parts[2]);
+                                                            if (y > 2400) y -= 543;
+                                                            return `${y}-${parts[1].padStart(2,'0')}-${parts[0].padStart(2,'0')}`;
+                                                        }
+                                                        if (s.includes('-')) {
+                                                            const parts = s.split('-');
+                                                            let y = Number(parts[0]);
+                                                            if (y > 2400) y -= 543;
+                                                            return `${y}-${parts[1].padStart(2,'0')}-${parts[2].padStart(2,'0')}`;
+                                                        }
+                                                        return '';
+                                                    };
+                                                    const inputYMD = parseToInput(r.date);
+                                                    setEditingRecord({...r, inputDate: inputYMD, date: formatDateForDB(inputYMD)});
+                                                }} className="text-blue-500 hover:bg-blue-50 p-1.5 rounded" title="แก้ไข"><i className="fa-solid fa-edit"></i></button>
+                                                <button onClick={() => setDeletingRecordId(r.id)} className="text-red-500 hover:bg-red-50 p-1.5 rounded" title="ลบ"><i className="fa-solid fa-trash"></i></button>
                                             </td>
                                         </tr>
-                                    )) : (<tr><td colSpan="7" className="p-6 text-center text-gray-400">ยังไม่มีประวัติแจ้งลา</td></tr>)}
+                                    )) : (<tr><td colSpan="8" className="p-6 text-center text-gray-400">ยังไม่มีประวัติแจ้งลา</td></tr>)}
                                 </tbody>
                             </table>
                         </div>
@@ -5897,6 +5977,11 @@
                                             <option value="ไปกิจกรรม">ไปกิจกรรม</option>
                                         </select>
                                     </div>
+                                    {editingRecord.leavePeriods && editingRecord.leavePeriods !== '[]' && (
+                                        <div className="text-sm font-bold text-blue-700 bg-blue-50 p-3 rounded-lg border border-blue-200">
+                                            <i className="fa-solid fa-clock mr-2"></i> ลารายคาบ: {(() => { try { const p = JSON.parse(editingRecord.leavePeriods); return p.join(', '); } catch(e) { return '-'; } })()}
+                                        </div>
+                                    )}
                                     <div className="flex justify-end space-x-3 mt-6 pt-4 border-t">
                                         <button type="button" onClick={() => setEditingRecord(null)} className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300">ยกเลิก</button>
                                         <button type="submit" disabled={isProcessing} className="px-4 py-2 bg-ns-blue text-white rounded hover:bg-blue-800 shadow">{isProcessing ? 'กำลังบันทึก...' : 'ยืนยันการแก้ไข'}</button>
@@ -7848,9 +7933,34 @@
 
                         const initialAttData = {};
                         matchedStudents.forEach(stu => {
-                            const leaveRecord = (leaveRecords || []).find(r => r.date === targetDateTH && String(r.studentId).trim() === String(stu.code).trim());
-                            if (leaveRecord) {
-                                initialAttData[stu.code] = leaveRecord.leaveType; 
+                            const dailyLeaves = (leaveRecords || []).filter(r => formatDisplayDate(r.date) === targetDateTH && String(r.studentId).trim() === String(stu.code).trim());
+                            
+                            for (const leaveRecord of dailyLeaves) {
+                                if (leaveRecord.leavePeriods && leaveRecord.leavePeriods !== '' && leaveRecord.leavePeriods !== '[]') {
+                                    // 💡 [แก้ไข] เปลี่ยนวิธีแยกคาบที่ลาโดยไม่ใช้ JSON.parse ป้องกัน Error ที่ทำให้กลายเป็นลาเต็มวันทุกคาบ
+                                    let periods = [];
+                                    const rawPeriods = leaveRecord.leavePeriods;
+                                    
+                                    if (typeof rawPeriods === 'string') {
+                                        // ตัดวงเล็บ เครื่องหมายคำพูด และช่องว่างออกทั้งหมด แล้วแยกด้วยลูกน้ำอย่างปลอดภัย
+                                        periods = rawPeriods.replace(/[\[\]"'\s]/g, '').split(',').filter(Boolean);
+                                    } else if (Array.isArray(rawPeriods)) {
+                                        periods = rawPeriods.map(String);
+                                    }
+
+                                    // เช็คว่า คาบที่กำลังสอน (activePeriods) มีคาบไหนตรงกับคาบที่ลาหรือไม่
+                                    const isLeaveInThisPeriod = activePeriods.some(p => periods.includes(String(p).trim()));
+                                    
+                                    if (isLeaveInThisPeriod) {
+                                        initialAttData[stu.code] = leaveRecord.leaveType; 
+                                        break; // เจอสถานะลาที่ตรงกับคาบแล้ว ให้หยุดเช็ค
+                                    }
+                                    // *** หากไม่ตรงคาบ ให้ปล่อยผ่านไปเฉยๆ ไม่ต้องลงไปที่ else เพื่อให้คาบอื่นยังคงเช็คชื่อได้ตามปกติ ***
+                                } else {
+                                    // ไม่มีระบุคาบในฐานข้อมูล = ลาเต็มวัน
+                                    initialAttData[stu.code] = leaveRecord.leaveType; 
+                                    break;
+                                }
                             }
                         });
                         setAttendanceData(initialAttData);
@@ -7930,7 +8040,7 @@
                 };
 
                 loadAttendanceData();
-            }, [currentDate, currentPeriod, teacherSchedules, students, periodSettings, registrations, refreshTrigger]); 
+            }, [currentDate, currentPeriod, teacherSchedules, students, periodSettings, registrations, refreshTrigger, leaveRecords]); 
 
             const handleStatusChange = (studentCode, status) => {
                 setAttendanceData(prev => ({ ...prev, [studentCode]: status }));
@@ -8183,7 +8293,40 @@
                             }
                         }
 
-                        const existingLeave = (leaveRecords || []).find(r => formatDisplayDate(r.date) === dbDate && String(r.studentId).trim() === String(stu.studentId).trim());
+                        // 💡 [แก้ไข]: ดักจับสถานะลาที่ซ้ำกันภายในวัน และส่งคำสั่งบันทึกเพียงแถวเดียวต่อวัน
+                        const isLeaveStatus = ['ลาป่วย', 'ลากิจ', 'ไปกิจกรรม'].includes(stu.status);
+                        
+                        if (isLeaveStatus) {
+                            let existingLeave = (leaveRecords || []).find(r => formatDisplayDate(r.date) === dbDate && String(r.studentId).trim() === String(stu.studentId).trim());
+                            
+                            const isAlreadyInBatch = batchPayload.leavesToAdd.some(l => formatDisplayDate(l.date) === dbDate && String(l.studentId).trim() === String(stu.studentId).trim());
+                            
+                            if (existingLeave) {
+                                // ถ้ามีใบลาในวันนั้นอยู่แล้ว ให้ปรับปรุงเฉพาะประเภทการลาล่าสุดให้ตรงกัน
+                                if (existingLeave.leaveType !== stu.status) {
+                                    const isAlreadyInEditBatch = batchPayload.leavesToEdit.some(l => l.id === existingLeave.id);
+                                    if (!isAlreadyInEditBatch) {
+                                        existingLeave.leaveType = stu.status;
+                                        batchPayload.leavesToEdit.push(existingLeave);
+                                    }
+                                }
+                            } else if (!isAlreadyInBatch) {
+                                // ถ้ายังไม่มีในฐานข้อมูล และยังไม่ถูกเตรียมส่งในรอบนี้ ให้เพิ่มเข้าไปเพียง 1 รายการ
+                                const newLeaveRecord = {
+                                    id: Date.now() + Math.floor(Math.random() * 1000) + leaveAddedCount,
+                                    date: dbDate,
+                                    studentId: studentInfo.code,
+                                    name: studentInfo.name,
+                                    room: `${studentInfo.classLevel}/${studentInfo.room}`,
+                                    leaveType: stu.status,
+                                    leavePeriods: JSON.stringify(activePeriods.map(String)), 
+                                    recorder: user ? user.name : 'ระบบอัตโนมัติ (เช็คชื่อ)'
+                                };
+                                batchPayload.leavesToAdd.push(newLeaveRecord);
+                                if (setLeaveRecords) setLeaveRecords(prev => [newLeaveRecord, ...(prev || [])]);
+                                leaveAddedCount++;
+                            }
+                        }
                     }
 
                     const response = await callGAS('saveAttendanceBatch', batchPayload);
@@ -10613,11 +10756,11 @@
             );
         };
 
-// // // // 11. หน้ารายงานผล (ReportsView) - ชุดใหม่ครบทุกฟังก์ชัน + ระบบกิจกรรมชุมนุม และ Excel Export
+        // // // // 11. หน้ารายงานผล (ReportsView) - ชุดใหม่ครบทุกฟังก์ชัน + ระบบกิจกรรมชุมนุม และ Excel Export
         const ReportsView = (props) => {
         const { students, timeRecords, behaviorRecords, activityRecords, activitiesSetting, schoolConfig, teachers, leaveRecords, user, registrations, allSchedules, msMakeupRecords } = props;
             const [activeTab, setActiveTab] = useState('stats');
-            const [dateFilter, setDateFilter] = useState('all');
+            const [dateFilter, setDateFilter] = useState('today'); // [แก้ไข] ปรับค่าเริ่มต้นจาก 'all' เป็น 'today'
             const [customStart, setCustomStart] = useState('');
             const [customEnd, setCustomEnd] = useState('');
 
@@ -10963,18 +11106,26 @@
             const studentNotInMap = {};
             
             targetDatesForStats.forEach(d => {
-                const inStudentIds = new Set(validTimeRecords.filter(r => r.date === d && r.type === 'เข้า').map(r => String(r.studentId).trim()));
-                const outStudentIds = new Set(validTimeRecords.filter(r => r.date === d && r.type === 'ออก').map(r => String(r.studentId).trim()));
+                const dayTimeRecords = validTimeRecords.filter(r => r.date === d);
+                
+                const inRecords = dayTimeRecords.filter(r => r.type === 'เข้า');
+                const outRecords = dayTimeRecords.filter(r => r.type === 'ออก');
+                
+                const inStudentIds = new Set(inRecords.map(r => String(r.studentId).trim()));
+                const outStudentIds = new Set(outRecords.map(r => String(r.studentId).trim()));
                 const leaveStudentIds = new Set(validLeaveRecords.filter(r => r.date === d).map(r => String(r.studentId).trim()));
                 
                 (students || []).forEach(s => {
                     const scode = String(s.code).trim();
                     if (!leaveStudentIds.has(scode)) {
-                        if (!inStudentIds.has(scode)) {
+                        // คิดสถิติ "ไม่บันทึกเข้า/ออก" เฉพาะวัน/ประเภท ที่มีการบันทึกเข้ามาในระบบแล้วเท่านั้น
+                        if (inRecords.length > 0 && !inStudentIds.has(scode)) {
                             notInScans++;
                             studentNotInMap[scode] = (studentNotInMap[scode] || 0) + 1;
                         }
-                        if (!outStudentIds.has(scode)) notOutScans++;
+                        if (outRecords.length > 0 && !outStudentIds.has(scode)) {
+                            notOutScans++;
+                        }
                     }
                 });
             });
@@ -10993,6 +11144,10 @@
                     const targetDates = uniqueDates.length > 0 ? uniqueDates : [dateFilter === 'yesterday' ? getBEStrSafe(new Date(Date.now() - 86400000)) : getBEStrSafe(new Date())];
                     targetDates.forEach(d => {
                         const recordsForDate = validTimeRecords.filter(r => r.date === d && r.type === targetType);
+                        
+                        // ถ้ายิ่งไม่มีใครแสกนประเภทนี้เลยในวันนี้ จะไม่แสดงรายชื่อว่ายังไม่บันทึก (รอให้มีการบันทึกคนแรกก่อน)
+                        if (recordsForDate.length === 0) return;
+
                         const studentIds = new Set(recordsForDate.map(r => String(r.studentId).trim()));
                         const leaveStudentIds = new Set(validLeaveRecords.filter(r => r.date === d).map(r => String(r.studentId).trim()));
                         
@@ -12561,8 +12716,8 @@
                                     <div className="bg-emerald-50 border-l-4 border-emerald-500 p-4 rounded-lg text-center shadow-sm md:col-span-4"><p className="text-sm font-bold text-emerald-700">จำนวนนักเรียนทั้งสิ้น</p><h4 className="text-3xl font-extrabold text-emerald-800">{(students || []).length}<span className="text-lg font-normal ml-1">คน</span></h4></div>
                                     <div className="bg-blue-50 border-l-4 border-blue-500 p-4 rounded-lg text-center shadow-sm"><p className="text-sm font-bold text-blue-700">จำนวนบันทึกเข้า</p><h4 className="text-3xl font-extrabold text-blue-800">{inScans}<span className="text-lg font-normal ml-1">คน</span></h4><p className="text-xs text-gray-500">ร้อยละ {((inScans/expectedScans)*100||0).toFixed(1)}%</p></div>
                                     <div className="bg-indigo-50 border-l-4 border-indigo-500 p-4 rounded-lg text-center shadow-sm"><p className="text-sm font-bold text-indigo-700">จำนวนบันทึกออก</p><h4 className="text-3xl font-extrabold text-indigo-800">{outScans}<span className="text-lg font-normal ml-1">คน</span></h4><p className="text-xs text-gray-500">ร้อยละ {((outScans/expectedScans)*100||0).toFixed(1)}%</p></div>
-                                    <div className="bg-gray-100 border-l-4 border-gray-500 p-4 rounded-lg text-center shadow-sm"><p className="text-sm font-bold text-gray-700">นักเรียนที่ไม่บันทึกเข้า</p><h4 className="text-3xl font-extrabold text-gray-800">{notInScans}<span className="text-lg font-normal ml-1">คน</span></h4><p className="text-xs text-gray-500">ร้อยละ {((notInScans/expectedScans)*100||0).toFixed(1)}%</p></div>
-                                    <div className="bg-gray-100 border-l-4 border-gray-500 p-4 rounded-lg text-center shadow-sm"><p className="text-sm font-bold text-gray-700">นักเรียนที่ไม่บันทึกออก</p><h4 className="text-3xl font-extrabold text-gray-800">{notOutScans}<span className="text-lg font-normal ml-1">คน</span></h4><p className="text-xs text-gray-500">ร้อยละ {((notOutScans/expectedScans)*100||0).toFixed(1)}%</p></div>
+                                    <div className="bg-gray-100 border-l-4 border-gray-500 p-4 rounded-lg text-center shadow-sm"><p className="text-sm font-bold text-gray-700">นักเรียนที่ไม่บันทึกเข้า</p><h4 className="text-3xl font-extrabold text-gray-800">{inScans > 0 ? notInScans : '-'}<span className="text-lg font-normal ml-1">คน</span></h4><p className="text-xs text-gray-500">{inScans > 0 ? `ร้อยละ ${((notInScans/expectedScans)*100||0).toFixed(1)}%` : 'รอข้อมูลบันทึกเข้า'}</p></div>
+                                    <div className="bg-gray-100 border-l-4 border-gray-500 p-4 rounded-lg text-center shadow-sm"><p className="text-sm font-bold text-gray-700">นักเรียนที่ไม่บันทึกออก</p><h4 className="text-3xl font-extrabold text-gray-800">{outScans > 0 ? notOutScans : '-'}<span className="text-lg font-normal ml-1">คน</span></h4><p className="text-xs text-gray-500">{outScans > 0 ? `ร้อยละ ${((notOutScans/expectedScans)*100||0).toFixed(1)}%` : 'รอข้อมูลบันทึกออก'}</p></div>
                                     <div className="bg-orange-50 border-l-4 border-orange-500 p-4 rounded-lg text-center shadow-sm"><p className="text-sm font-bold text-orange-700">ลาป่วย</p><h4 className="text-3xl font-extrabold text-orange-800">{sickLeaveCount}<span className="text-lg font-normal ml-1">คน</span></h4><p className="text-xs text-gray-500">ร้อยละ {((sickLeaveCount/expectedScans)*100||0).toFixed(1)}%</p></div>
                                     <div className="bg-purple-50 border-l-4 border-purple-500 p-4 rounded-lg text-center shadow-sm"><p className="text-sm font-bold text-purple-700">ลากิจ</p><h4 className="text-3xl font-extrabold text-purple-800">{personalLeaveCount}<span className="text-lg font-normal ml-1">คน</span></h4><p className="text-xs text-gray-500">ร้อยละ {((personalLeaveCount/expectedScans)*100||0).toFixed(1)}%</p></div>
                                     <div className="bg-teal-50 border-l-4 border-teal-500 p-4 rounded-lg text-center shadow-sm"><p className="text-sm font-bold text-teal-700">ไปกิจกรรม</p><h4 className="text-3xl font-extrabold text-teal-800">{activityLeaveCount}<span className="text-lg font-normal ml-1">คน</span></h4><p className="text-xs text-gray-500">ร้อยละ {((activityLeaveCount/expectedScans)*100||0).toFixed(1)}%</p></div>
@@ -12608,8 +12763,8 @@
                                                 const activityCount = lRecs.filter(r => r.leaveType === 'ไปกิจกรรม').length;
                                                 const lateCount = tRecs.filter(r => r.type === 'เข้า' && r.statusStr === 'สาย').length;
                                                 
-                                                const noInCount = Math.max(0, totalSt - inCount - lRecs.length);
-                                                const noOutCount = Math.max(0, totalSt - outCount - lRecs.length);
+                                                const noInCount = inCount > 0 ? Math.max(0, totalSt - inCount - lRecs.length) : 0;
+                                                const noOutCount = outCount > 0 ? Math.max(0, totalSt - outCount - lRecs.length) : 0;
                                                 
                                                 cData.push({ label: dayLabel, inCount, outCount, noInCount, noOutCount, sickCount, personalCount, activityCount, lateCount });
                                             }
@@ -12648,8 +12803,8 @@
                                                 const lateCount = tRecs.filter(r => r.type === 'เข้า' && r.statusStr === 'สาย').length;
                                                 
                                                 const theoreticalTotal = totalSt * activeDaysCount;
-                                                const noInCount = Math.max(0, theoreticalTotal - inCount - lRecs.length);
-                                                const noOutCount = Math.max(0, theoreticalTotal - outCount - lRecs.length);
+                                                const noInCount = inCount > 0 ? Math.max(0, theoreticalTotal - inCount - lRecs.length) : 0;
+                                                const noOutCount = outCount > 0 ? Math.max(0, theoreticalTotal - outCount - lRecs.length) : 0;
                                                 
                                                 cData.push({ label: label, inCount, outCount, noInCount, noOutCount, sickCount, personalCount, activityCount, lateCount });
                                             }
@@ -12675,8 +12830,8 @@
                                                 const activeDays = uniqueDays.length > 0 ? uniqueDays.length : 1;
                                                 const theoreticalTotal = totalSt * activeDays;
                                                 
-                                                const noInCount = Math.max(0, theoreticalTotal - inCount - lRecs.length);
-                                                const noOutCount = Math.max(0, theoreticalTotal - outCount - lRecs.length);
+                                                const noInCount = inCount > 0 ? Math.max(0, theoreticalTotal - inCount - lRecs.length) : 0;
+                                                const noOutCount = outCount > 0 ? Math.max(0, theoreticalTotal - outCount - lRecs.length) : 0;
                                                 
                                                 cData.push({ label: monthLabel, inCount, outCount, noInCount, noOutCount, sickCount, personalCount, activityCount, lateCount });
                                             }
