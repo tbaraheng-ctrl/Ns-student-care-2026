@@ -15042,21 +15042,36 @@
             const syncGlobalData = async () => {
                 setIsSyncing(true);
                 try {
-                    const [initialRes, behaviorRecordsRes, activityRecordsRes, forgotCardRecordsRes, leaveRecordsRes, registrationsRes, studentsRes, provRes, directSheetStudentsRes, usersRes, teachersRes, exemptionsRes, msMakeupRes, schedulesRes] = await Promise.allSettled([
-                        fetchFastAPI('getInitialData'), // 💡 เปลี่ยนมาใช้ fetchFastAPI เพื่อดึงข้อมูลผ่าน Chunked Cache ทะลุขีดจำกัด
+                    // 💡 [แก้ไข]: แบ่งกลุ่มการดึงข้อมูล (Batch Fetching) ลดภาระแบนด์วิดท์เซิร์ฟเวอร์
+                    
+                    // กลุ่มที่ 1: ข้อมูลตั้งค่าพื้นฐาน และฐานข้อมูลนักเรียนตรงจาก CSV (โหลดเร็วที่สุด)
+                    const [initialRes, directSheetStudentsRes] = await Promise.allSettled([
+                        fetchFastAPI('getInitialData'),
+                        fetchStudentsFromDirectSheet()
+                    ]);
+
+                    // กลุ่มที่ 2: ตารางสอน และการลงทะเบียนวิชา (จำเป็นสำหรับการเช็คชื่อ)
+                    const [schedulesRes, registrationsRes, teachersRes, usersRes] = await Promise.allSettled([
+                        callGAS('getSchedules', { targetSheetId: '1pgvYO_Qh9m-3HkLV3kbyOyK-ztdO1Vb2yNTxk3X6RV0' }),
+                        callGAS('getRegistrations'),
+                        callGAS('getTeachers', { targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' }),
+                        callGAS('getUsers', { targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' })
+                    ]);
+
+                    // กลุ่มที่ 3: ประวัติพฤติกรรม, กิจกรรม, และการลา
+                    const [behaviorRecordsRes, activityRecordsRes, leaveRecordsRes, exemptionsRes] = await Promise.allSettled([
                         callGAS('getBehaviorRecords', { targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' }), 
                         callGAS('getActivityRecords', { targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' }), 
+                        callGAS('getLeaveRecords', { targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' }),
+                        callGAS('getExemptions', { targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' })
+                    ]);
+
+                    // กลุ่มที่ 4: ข้อมูลประกอบอื่นๆ (ประวัติลืมบัตร, ม.ส., ข้อมูลจังหวัด)
+                    const [forgotCardRecordsRes, studentsRes, provRes, msMakeupRes] = await Promise.allSettled([
                         callGAS('getForgotCardRecords', { targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' }), 
-                        callGAS('getLeaveRecords', { targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' }), 
-                        callGAS('getRegistrations'), 
-                        callGAS('getStudents'),
+                        callGAS('getStudents'), // โหลดสำรองกรณี CSV ล้มเหลว
                         callGAS('getProvinces'),
-                        fetchStudentsFromDirectSheet(),
-                        callGAS('getUsers', { targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' }),
-                        callGAS('getTeachers', { targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' }),
-                        callGAS('getExemptions', { targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' }),
-                        callGAS('getMsMakeupRecords', { targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' }),
-                        callGAS('getSchedules', { targetSheetId: '1pgvYO_Qh9m-3HkLV3kbyOyK-ztdO1Vb2yNTxk3X6RV0' })
+                        callGAS('getMsMakeupRecords', { targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' })
                     ]);
 
                     if (initialRes.status === 'fulfilled' && initialRes.value && initialRes.value.data) {
