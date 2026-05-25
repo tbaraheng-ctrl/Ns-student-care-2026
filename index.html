@@ -73,7 +73,7 @@
 
   // เริ่มต้นการทำงานของ Firebase
   firebase.initializeApp(firebaseConfig);
-  const db = firebase.firestore();
+  window.db = firebase.firestore();
 </script>
 
 </head>
@@ -220,19 +220,21 @@
 
         // 👇👇👇 เพิ่มโค้ดขั้นตอนที่ 3: ฟังก์ชันบันทึกข้อมูลลง Firebase 👇👇👇
         const saveTimeToFirebase = async (newRecord) => {
+            // 🚀 [แก้ไข] แยกคำสั่งส่ง Google Sheets ออกมาไว้นอก Try-Catch และให้อยู่บรรทัดแรกสุด
+            // เพื่อการันตีว่าข้อมูลจะถูกส่งเข้า Google Sheets เสมอ แม้ว่าระบบ Firebase จะมีปัญหาก็ตาม
+            callGAS('saveTime', newRecord).catch(e => console.log("Background GAS save error:", e));
+
             try {
-                // 1. บันทึกลง Firebase ทันที (เสร็จภายใน 0.1 วินาที ป้องกันการเกิด Lock Timeout)
-                await window.db.collection("time_records").doc(newRecord.id.toString()).set(newRecord);
-                console.log("บันทึกข้อมูลเข้า-ออกลง Firebase สำเร็จ:", newRecord.name);
-                
-                // 2. ส่งข้อมูลไป Google Sheets เบื้องหลังแบบ Fire-and-Forget (ไม่ต้องรอให้เสร็จ)
-                // เพื่อให้ระบบเก็บข้อมูลทั้ง 2 ฝั่ง แต่ครูสแกนคนต่อไปได้ทันทีโดยไม่กระตุก
-                callGAS('saveTime', newRecord).catch(e => console.log("Background GAS save skipped:", e));
-                
+                // พยายามบันทึกลง Firebase เพื่อให้หน้าจอฝั่งครูแสดงผลได้เร็วขึ้น
+                if (window.db) {
+                    await window.db.collection("time_records").doc(newRecord.id.toString()).set(newRecord);
+                    console.log("บันทึกข้อมูลเข้า-ออกลง Firebase สำเร็จ:", newRecord.name);
+                }
                 return { status: 'success' };
             } catch (error) {
-                console.error("Error adding document to Firebase: ", error);
-                throw error;
+                console.error("Error adding document to Firebase (Skipped): ", error);
+                // 🚀 [แก้ไข] เอาคำสั่ง throw error; ออก เพื่อไม่ให้มันไปหยุดการทำงานของระบบหลัก
+                return { status: 'firebase_error' };
             }
         };
         // 👆👆👆 ---------------------------------------------------- 👆👆👆
@@ -251,7 +253,10 @@
 
         // --- Helper Function สำหรับคำนวณเวลาเข้า-ออกกรณีข้ามวัน ---
         const determineModeAndLate = (currentStr, inStr, lateStr, outStr) => {
-            if (!inStr || !lateStr || !outStr) return { isOutMode: false, isLate: false };
+            // [แก้ไข] ป้องกันบัคแจ้งสแกนซ้ำ: หากเวลาตั้งค่าว่างเปล่า หรือโหลดไม่ทัน ให้ใช้ค่าเริ่มต้น แทนการ Return False ทันที ซึ่งจะทำให้ระบบเข้าใจว่าเป็นโหมด "เข้า" ตลอดวัน
+            const safeIn = inStr || '06:00';
+            const safeLate = lateStr || '08:00';
+            const safeOut = outStr || '15:30';
 
             const getMinutes = (ts) => {
                 const [h, m] = ts.split(':').map(Number);
@@ -259,9 +264,9 @@
             };
 
             let c = getMinutes(currentStr);
-            let i = getMinutes(inStr);
-            let l = getMinutes(lateStr);
-            let o = getMinutes(outStr);
+            let i = getMinutes(safeIn);
+            let l = getMinutes(safeLate);
+            let o = getMinutes(safeOut);
 
             // ปรับเวลาให้เป็นกรอบ 24 ชั่วโมง โดยเริ่มจากเวลาเข้า
             if (o <= i) o += 1440;
@@ -475,22 +480,23 @@
 
             useEffect(() => {
                 const elem = document.documentElement;
+                // 🚀 [แก้ไข] เปลี่ยนเป็น .catch(() => {}) เพื่อซ่อน Error ใน Console กรณีที่เบราว์เซอร์ไม่อนุญาตให้ขยายเต็มจอ
                 if (elem.requestFullscreen) {
-                    elem.requestFullscreen().catch(err => console.log("Full-screen error:", err));
+                    elem.requestFullscreen().catch(() => {});
                 } else if (elem.webkitRequestFullscreen) {
-                    elem.webkitRequestFullscreen().catch(err => console.log("Full-screen error:", err));
+                    elem.webkitRequestFullscreen().catch(() => {});
                 } else if (elem.msRequestFullscreen) {
-                    elem.msRequestFullscreen().catch(err => console.log("Full-screen error:", err));
+                    elem.msRequestFullscreen().catch(() => {});
                 }
 
                 return () => {
                     if (document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement) {
                         if (document.exitFullscreen) {
-                            document.exitFullscreen().catch(err => console.log(err));
+                            document.exitFullscreen().catch(() => {});
                         } else if (document.webkitExitFullscreen) {
-                            document.webkitExitFullscreen().catch(err => console.log(err));
+                            document.webkitExitFullscreen().catch(() => {});
                         } else if (document.msExitFullscreen) {
-                            document.msExitFullscreen().catch(err => console.log(err));
+                            document.msExitFullscreen().catch(() => {});
                         }
                     }
                 };
@@ -524,6 +530,7 @@
             // 👇 ฟังก์ชันหลักในการบันทึกข้อมูล (ใช้ร่วมกันทั้งกล้องสแกน และ กรอกรหัสด้วยมือ) 👇
             const processScanData = async (decodedText) => {
                 if (isProcessingRef.current) return; 
+                if (!decodedText) return;
                 
                 // 💡 ยกเลิกระบบตรวจสอบ GPS ตรงนี้ (สแกนได้ทันทีโดยไม่ต้องเช็คระยะห่าง)
 
@@ -537,8 +544,22 @@
                 const { isOutMode: scanIsOutMode, isLate: scanIsLate } = determineModeAndLate(scanTimeStr, latestTimeSettings.current.startIn, latestTimeSettings.current.lateTime, latestTimeSettings.current.startOut);
                 const currentType = scanIsOutMode ? "ออก" : "เข้า";
 
-                const decodedClean = String(decodedText).trim();
-                const studentInfo = latestStudentList.current.find(s => s.code && String(s.code).trim() === decodedClean);
+                // [แก้ไข] ทำความสะอาดรหัส QR ป้องกันอักขระซ่อนเร้น และดึงเฉพาะเลขกรณีคิวอาร์โค้ดเป็น URL
+                let decodedClean = String(decodedText).trim().replace(/[\u200B-\u200D\uFEFF]/g, '');
+                if (decodedClean.includes('http') || decodedClean.includes('/')) {
+                    const urlParts = decodedClean.split('/');
+                    decodedClean = urlParts[urlParts.length - 1];
+                }
+
+                // [แก้ไข] ฟังก์ชันเทียบรหัสแบบแม่นยำ (รองรับกรณีรหัสมี/ไม่มีเลข 0 นำหน้า เพื่อแก้บัคไม่พบข้อมูล)
+                const isMatchId = (id1, id2) => {
+                    if (!id1 || !id2) return false;
+                    const s1 = String(id1).replace(/^0+/, '').trim();
+                    const s2 = String(id2).replace(/^0+/, '').trim();
+                    return s1 === s2 && s1 !== '';
+                };
+
+                const studentInfo = latestStudentList.current.find(s => s.code && isMatchId(s.code, decodedClean));
                 
                 if (!studentInfo) {
                     setStatus("ไม่พบข้อมูลนักเรียนในระบบ");
@@ -566,8 +587,9 @@
                     return str;
                 };
 
+                // แก้ไขการเช็คสแกนซ้ำให้ใช้ฟังก์ชัน isMatchId ที่แม่นยำขึ้น
                 const isDuplicate = latestRecords.current.some(r => 
-                    String(r.studentId).trim() === decodedClean && 
+                    isMatchId(r.studentId, decodedClean) && 
                     safeFormatDate(r.date) === scanDateStr && 
                     r.type === currentType
                 );
@@ -1009,7 +1031,7 @@
                 }
             }, [pendingSaves, isTryingToCloseScanner]);
 
-            // 🚀 [เพิ่มใหม่ 3] ฟังก์ชันสำหรับเล่นเสียง "ติ้ง" เมื่อสแกนและพบข้อมูล (รองรับการปรับระดับเสียง)
+            // 🚀 [แก้ไข] ฟังก์ชันสำหรับเล่นเสียง "ติ้ง" เมื่อสแกนและพบข้อมูล ปรับคลื่นเสียงและความดังให้ชัดเจนขึ้นทะลุเสียงรบกวน
             const playScanBeep = React.useCallback(() => {
                 if (isMuted) return;
                 try {
@@ -1018,18 +1040,21 @@
                     const gainNode = audioCtx.createGain();
                     oscillator.connect(gainNode);
                     gainNode.connect(audioCtx.destination);
-                    oscillator.type = 'sine';
-                    oscillator.frequency.value = 1200; // 🚀 ปรับความถี่สูงขึ้นให้เป็นเสียง "ติ้ง"
-                    gainNode.gain.setValueAtTime(1 * volumeLevel, audioCtx.currentTime);
-                    gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.3); // ปรับหางเสียงให้กังวานขึ้นเล็กน้อย
+                    // เปลี่ยนจาก sine เป็น triangle เสียงจะแหลมและแทรกเสียงรบกวนในสภาพแวดล้อมได้ดีกว่า
+                    oscillator.type = 'triangle'; 
+                    oscillator.frequency.value = 1500; // ความถี่สูงขึ้นให้ดัง "ปิ๊บ" ชัดเจน
+                    // เพิ่ม Gain ให้ดังขึ้น (1.5) เพื่อให้สู้เสียงสภาพแวดล้อมได้
+                    gainNode.gain.setValueAtTime(1.5 * volumeLevel, audioCtx.currentTime);
+                    // ทำให้เสียงสั้นและกระชับ (0.15 วิ)
+                    gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.15); 
                     oscillator.start(audioCtx.currentTime);
-                    oscillator.stop(audioCtx.currentTime + 0.3);
+                    oscillator.stop(audioCtx.currentTime + 0.15);
                 } catch (e) {
                     console.log("Audio not supported for beep");
                 }
             }, [volumeLevel, isMuted]);
 
-            // 🚀 [เพิ่มใหม่] ฟังก์ชันสำหรับเล่นเสียง "ตื้ด" เมื่อสแกนซ้ำหรือผิดพลาด (รองรับการปรับระดับเสียง)
+            // 🚀 [แก้ไข] ฟังก์ชันสำหรับเล่นเสียง "ตื้ด" เมื่อสแกนซ้ำหรือผิดพลาด ปรับคลื่นเสียงและความดังให้ชัดเจนขึ้น
             const playErrorBeep = React.useCallback(() => {
                 if (isMuted) return;
                 try {
@@ -1038,12 +1063,14 @@
                     const gainNode = audioCtx.createGain();
                     oscillator.connect(gainNode);
                     gainNode.connect(audioCtx.destination);
-                    oscillator.type = 'square';
+                    // เปลี่ยนเป็น sawtooth เสียงจะออกแข็งๆ "ตื๊ดดด" แจ้งเตือนข้อผิดพลาดได้ดีมาก
+                    oscillator.type = 'sawtooth'; 
                     oscillator.frequency.value = 150; // ความถี่ต่ำ เสียงตื้ด
-                    gainNode.gain.setValueAtTime(0.3 * volumeLevel, audioCtx.currentTime);
-                    gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.4);
+                    // เพิ่มระดับความดังจากเดิม 0.3 เป็น 1.5
+                    gainNode.gain.setValueAtTime(1.5 * volumeLevel, audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.5);
                     oscillator.start(audioCtx.currentTime);
-                    oscillator.stop(audioCtx.currentTime + 0.4);
+                    oscillator.stop(audioCtx.currentTime + 0.5);
                 } catch (e) {
                     console.log("Audio not supported for error beep");
                 }
@@ -1323,9 +1350,26 @@
                 const scanDateStr = `${String(scanNow.getDate()).padStart(2, '0')}/${String(scanNow.getMonth() + 1).padStart(2, '0')}/${scanNow.getFullYear() + 543}`;
                 
                 const { isOutMode, isLate: scanIsLate } = determineModeAndLate(scanTimeStr, timeSettings.startIn, timeSettings.lateTime, timeSettings.startOut);
-                const currentType = isOutMode ? "ออก" : "เข้า";
+                let currentType = isOutMode ? "ออก" : "เข้า";
 
-                const studentExemption = (exemptions || []).find(ex => String(ex.studentId).trim() === String(studentToSave.code).trim());
+                // 🚀 [แก้ไข] ฟังก์ชันเทียบรหัสแบบยืดหยุ่น สำหรับฟอร์มกรอกมือ
+                const isMatchId = (id1, id2) => {
+                    if (!id1 || !id2) return false;
+                    const s1 = String(id1).replace(/^0+/, '').trim();
+                    const s2 = String(id2).replace(/^0+/, '').trim();
+                    return s1 === s2 && s1 !== '';
+                };
+
+                // 🚀 [แก้ไข] ระบบ Auto-Correct ป้องกันบัคแจ้งซ้ำตอนเลิกเรียน สำหรับการกรอกรหัสด้วยมือ
+                const currentHourNum = scanNow.getHours();
+                const studentCodeToCompare = String(studentToSave.code);
+                const hasScannedInToday = records.some(r => isMatchId(r.studentId, studentCodeToCompare) && formatDisplayDateCached(r.date) === scanDateStr && r.type === 'เข้า');
+                
+                if (currentType === "เข้า" && hasScannedInToday && currentHourNum >= 12) {
+                    currentType = "ออก";
+                }
+
+                const studentExemption = (exemptions || []).find(ex => isMatchId(ex.studentId, studentCodeToCompare));
                 let isExempted = false;
                 if (studentExemption && scanIsLate && currentType === "เข้า") {
                     isExempted = true;
@@ -1337,10 +1381,9 @@
 
                 // 🚀 [ปรับปรุงความเร็วสูงสุด]: ค้นหาการบันทึกซ้ำซ้อนด้วยลูป For ปกติที่เร็วที่สุด
                 let isDuplicate = false;
-                const studentCodeToCompare = String(studentToSave.code).trim();
                 for (let i = 0; i < records.length; i++) {
                     const r = records[i];
-                    if (String(r.studentId).trim() === studentCodeToCompare && r.type === currentType) {
+                    if (isMatchId(r.studentId, studentCodeToCompare) && r.type === currentType) {
                         if (formatDisplayDateCached(r.date) === scanDateStr) {
                             isDuplicate = true;
                             break;
@@ -1362,8 +1405,11 @@
                 setSelectedStudentForManual(null);
                 setIsProcessingManual(false);
 
+                // 🚀 [แก้ไขที่ 3] สร้าง ID เฉพาะป้องกันการทับซ้อนเมื่อใช้งานหลายเครื่องพร้อมกัน (กรอกด้วยมือ)
+                const uniqueBaseId = Date.now() + Math.floor(Math.random() * 1000000);
+
                 const newTimeRecord = {
-                    id: Date.now(),
+                    id: uniqueBaseId,
                     date: scanDateStr,
                     studentId: studentToSave.code,
                     name: studentToSave.name,
@@ -1375,12 +1421,14 @@
                 };
 
                 const newForgotCardRecord = {
-                    id: Date.now() + 1,
+                    id: uniqueBaseId + 1,
                     date: scanDateStr,
                     studentId: studentToSave.code,
                     name: studentToSave.name,
                     room: `${studentToSave.classLevel}/${studentToSave.room}`,
                     time: scanTimeStr,
+                    statusStr: finalStatusStr,
+                    type: currentType,
                     recorder: user ? user.name : 'ระบบอัตโนมัติ'
                 };
 
@@ -1450,8 +1498,9 @@
                                 finalFBehaviorName = `${finalFBehaviorName} (ครั้งที่ ${forgotCardCount})`;
                             }
 
+                            // 🚀 [แก้ไขที่ 4] อัปเดต ID พฤติกรรม (บันทึกกรณีลืมบัตร)
                             const newForgotBehaviorRecord = {
-                                id: Date.now() + 3,
+                                id: uniqueBaseId + 3,
                                 date: scanDateStr,
                                 studentId: studentToSave.code,
                                 name: studentToSave.name,
@@ -1489,8 +1538,9 @@
                             const deductScore = -Math.abs(Number(lateBehavior.score));
                             const finalBehaviorName = lateBehavior.name.includes(searchKeyword) ? lateBehavior.name : `${lateBehavior.name} (${searchKeyword})`;
 
+                            // 🚀 [แก้ไขที่ 5] อัปเดต ID พฤติกรรม (บันทึกกรณีสายลงมือ)
                             const newBehaviorRecord = {
-                                id: Date.now() + 2,
+                                id: uniqueBaseId + 2,
                                 date: scanDateStr,
                                 studentId: studentToSave.code,
                                 name: studentToSave.name,
