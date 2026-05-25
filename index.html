@@ -9454,16 +9454,18 @@
                                         <i className="fa-solid fa-file-contract mr-1 md:mr-2"></i> รายงาน
                                     </button>
                                 )}
-                                {/* 💡 เพิ่มปุ่มอัปเดตข้อมูล */}
+                                {/* 💡 เพิ่มปุ่มอัปเดตข้อมูล พร้อมแสดงสถานะกำลังอัปเดท */}
                                 <button
                                     onClick={() => {
+                                        setIsFetchingAttendance(true); // แสดงสถานะโหลดทันที
                                         setAttendanceCache({}); // ล้างแคชเพื่อให้ดึงใหม่
                                         setRefreshTrigger(prev => prev + 1);
+                                        if (onRefresh) onRefresh(); // ดึงข้อมูลใหม่จากฐานข้อมูลทั้งระบบ
                                     }}
-                                    disabled={isFetchingAttendance || isLoadingSchedule}
-                                    className="flex-1 md:flex-none justify-center bg-teal-600 hover:bg-teal-700 text-white px-3 md:px-4 py-2 rounded-lg font-bold shadow-sm transition flex items-center text-xs md:text-base"
+                                    disabled={isFetchingAttendance || isLoadingSchedule || isSyncing}
+                                    className="flex-1 md:flex-none justify-center bg-teal-600 hover:bg-teal-700 text-white px-3 md:px-4 py-2 rounded-lg font-bold shadow-sm transition flex items-center text-xs md:text-base disabled:opacity-70 disabled:cursor-not-allowed"
                                 >
-                                    <i className={`fa-solid fa-sync ${isFetchingAttendance || isLoadingSchedule ? 'fa-spin' : ''} mr-1 md:mr-2`}></i> อัปเดต
+                                    <i className={`fa-solid fa-sync ${isFetchingAttendance || isLoadingSchedule || isSyncing ? 'fa-spin' : ''} mr-1 md:mr-2`}></i> {isFetchingAttendance || isLoadingSchedule || isSyncing ? 'กำลังอัปเดท...' : 'อัปเดต'}
                                 </button>
                                 <div className="flex-1 md:flex-none text-center bg-blue-50 px-3 md:px-4 py-2 rounded-lg border border-blue-100 font-bold text-ns-blue shadow-sm text-xs md:text-base truncate max-w-[150px] md:max-w-none">
                                     <i className="fa-solid fa-chalkboard-user mr-1 md:mr-2"></i> {user ? user.name : 'กำลังโหลด...'}
@@ -16892,7 +16894,7 @@
                     case 'register':
                         return <RegisterView user={user} students={globalStudents} teachers={globalTeachers} records={globalRegistrations} setRecords={setGlobalRegistrations} isSyncing={isSyncing} />;
                     case 'attendance':
-                        return <AttendanceView user={user} students={globalStudents} leaveRecords={globalLeaveRecords} setLeaveRecords={setGlobalLeaveRecords} periodSettings={globalPeriodSettings} behaviorsSetting={globalBehaviors} behaviorRecords={globalBehaviorRecords} setBehaviorRecords={setGlobalBehaviorRecords} registrations={globalRegistrations} allSchedules={globalSchedules} teachers={globalTeachers} schoolConfig={schoolConfig} />;
+                        return <AttendanceView user={user} students={globalStudents} leaveRecords={globalLeaveRecords} setLeaveRecords={setGlobalLeaveRecords} periodSettings={globalPeriodSettings} behaviorsSetting={globalBehaviors} behaviorRecords={globalBehaviorRecords} setBehaviorRecords={setGlobalBehaviorRecords} registrations={globalRegistrations} allSchedules={globalSchedules} teachers={globalTeachers} schoolConfig={schoolConfig} isSyncing={isSyncing} onRefresh={syncGlobalData} />;
                     case 'ms_makeup': // <--- เพิ่มตรงนี้
                         return <MsMakeupView students={globalStudents} records={globalMsMakeupRecords} setRecords={setGlobalMsMakeupRecords} user={user} isSyncing={isSyncing} schoolConfig={schoolConfig} allSchedules={globalSchedules} />;
                     case 'leave':
