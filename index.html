@@ -7723,8 +7723,8 @@
             );
         };
 
-// 14. หน้าเช็คชื่อเข้าเรียน (AttendanceView)
-        const AttendanceView = ({ user, students, leaveRecords, setLeaveRecords, periodSettings, behaviorsSetting, behaviorRecords, setBehaviorRecords, registrations, allSchedules, teachers = [], schoolConfig }) => {
+        // 14. หน้าเช็คชื่อเข้าเรียน (AttendanceView)
+        const AttendanceView = ({ user, students, leaveRecords, setLeaveRecords, periodSettings, behaviorsSetting, behaviorRecords, setBehaviorRecords, registrations, allSchedules, teachers = [], schoolConfig, isSyncing, onRefresh }) => {
             const React = window.React || require('react');
             const { useState, useEffect, useRef } = React;
 
@@ -8453,7 +8453,7 @@
                         // แสดงผลออกหน้าจอทันที 0 วินาที 
                         setAttendanceData(initialAttData);
                         setIsEditMode(isCurrentlyEditing);
-                        setIsFetchingAttendance(false); // ปลดล็อค UI ทันที
+                        // 💡 ลบ setIsFetchingAttendance(false); ตรงนี้ออก เพื่อให้ปุ่มหมุนต่อ
                         
                         // 🚀 [Auto-Correction เบื้องหลัง] แอบดึงข้อมูลล่าสุด เพื่อป้องกันครูเช็คขาดทับใบลาที่เพิ่งแจ้งเข้ามา (ไม่บล็อคหน้าจอ)
                         (async () => {
@@ -8606,6 +8606,8 @@
                                 });
                             } catch (e) {
                                 console.error("Auto background sync error:", e);
+                            } finally {
+                                setIsFetchingAttendance(false); // 💡 เพิ่มจุดนี้: ปลดล็อคปุ่มให้หยุดหมุน เมื่อกระบวนการดึงข้อมูลและอัปเดตเสร็จสมบูรณ์
                             }
                         })();
 
@@ -8616,6 +8618,7 @@
                         setAttendanceData({});
                         setScannedStudents([]);
                         setIsEditMode(false);
+                        setIsFetchingAttendance(false); // 💡 เพิ่มจุดนี้: ปลดล็อคปุ่มให้หยุดหมุน กรณีไม่มีข้อมูลวิชา
                     }
                 };
 
@@ -9459,8 +9462,8 @@
                                     onClick={() => {
                                         setIsFetchingAttendance(true); // แสดงสถานะโหลดทันที
                                         setAttendanceCache({}); // ล้างแคชเพื่อให้ดึงใหม่
-                                        setRefreshTrigger(prev => prev + 1);
-                                        if (onRefresh) onRefresh(); // ดึงข้อมูลใหม่จากฐานข้อมูลทั้งระบบ
+                                        setRefreshTrigger(prev => prev + 1); // กระตุ้น useEffect ให้อัปเดตเฉพาะหน้านี้
+                                        // นำคำสั่งดึงข้อมูลทั้งระบบ (onRefresh) ออก เพื่อไม่อัปเดตข้อมูลอื่นๆ ที่ไม่เกี่ยวข้อง
                                     }}
                                     disabled={isFetchingAttendance || isLoadingSchedule || isSyncing}
                                     className="flex-1 md:flex-none justify-center bg-teal-600 hover:bg-teal-700 text-white px-3 md:px-4 py-2 rounded-lg font-bold shadow-sm transition flex items-center text-xs md:text-base disabled:opacity-70 disabled:cursor-not-allowed"
@@ -16894,7 +16897,7 @@
                     case 'register':
                         return <RegisterView user={user} students={globalStudents} teachers={globalTeachers} records={globalRegistrations} setRecords={setGlobalRegistrations} isSyncing={isSyncing} />;
                     case 'attendance':
-                        return <AttendanceView user={user} students={globalStudents} leaveRecords={globalLeaveRecords} setLeaveRecords={setGlobalLeaveRecords} periodSettings={globalPeriodSettings} behaviorsSetting={globalBehaviors} behaviorRecords={globalBehaviorRecords} setBehaviorRecords={setGlobalBehaviorRecords} registrations={globalRegistrations} allSchedules={globalSchedules} teachers={globalTeachers} schoolConfig={schoolConfig} isSyncing={isSyncing} onRefresh={syncGlobalData} />;
+                        return <AttendanceView user={user} students={globalStudents} leaveRecords={globalLeaveRecords} setLeaveRecords={setGlobalLeaveRecords} periodSettings={globalPeriodSettings} behaviorsSetting={globalBehaviors} behaviorRecords={globalBehaviorRecords} setBehaviorRecords={setGlobalBehaviorRecords} registrations={globalRegistrations} setRegistrations={setGlobalRegistrations} allSchedules={globalSchedules} teachers={globalTeachers} schoolConfig={schoolConfig} isSyncing={isSyncing} onRefresh={syncGlobalData} />;
                     case 'ms_makeup': // <--- เพิ่มตรงนี้
                         return <MsMakeupView students={globalStudents} records={globalMsMakeupRecords} setRecords={setGlobalMsMakeupRecords} user={user} isSyncing={isSyncing} schoolConfig={schoolConfig} allSchedules={globalSchedules} />;
                     case 'leave':
