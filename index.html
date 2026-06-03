@@ -5222,39 +5222,16 @@
                 return str; 
             };
 
-            // 🚀 [แก้ไข] ดึงข้อมูลฉบับเต็มแบบเจาะจง (Lazy Loading Full Data) ทำงานเฉพาะเมื่อกดแก้ไขเท่านั้น
+            // 🚀 [แก้ไขขั้นเด็ดขาด] ยกเลิกการใช้ Firebase 100% สำหรับข้อมูลนักเรียน วิ่งตรงไปหา Google Sheets (GAS) เสมอ
             const editStudent = async (lightStu) => {
                 setIsSaving(true); // ขึ้นสถานะโหลดวงแหวนหมุน
                 try {
                     let fullData = null;
-                    
-                    // 1. ดึงฉบับเต็มจาก Firebase ด้วย docId
-                    if (window.db && lightStu.docId) {
-                        const docSnap = await window.db.collection('student_records').doc(lightStu.docId).get();
-                        if (docSnap.exists) {
-                            const data = docSnap.data();
-                            if (lightStu._mapKey && data[lightStu._mapKey]) {
-                                fullData = data[lightStu._mapKey];
-                            } else {
-                                if (data['เลขประจำตัว'] === lightStu.code || data.code === lightStu.code) {
-                                    fullData = data;
-                                } else {
-                                    Object.values(data).forEach(v => {
-                                        if (v && typeof v === 'object' && (v['เลขประจำตัว'] === lightStu.code || v.code === lightStu.code)) {
-                                            fullData = v;
-                                        }
-                                    });
-                                }
-                            }
-                        }
-                    }
 
-                    // 2. ถ้าไม่มีใน Firebase ให้ไปดึงข้อมูลเต็มจาก GAS (Google Sheets)
-                    if (!fullData) {
-                        const res = await callGAS('getStudentFull', { id: lightStu.id, code: lightStu.code });
-                        if (res && res.status === 'success' && res.data) {
-                            fullData = res.data;
-                        }
+                    // วิ่งไปดึงข้อมูลเต็มจาก GAS (Google Sheets) ทันที ไม่ต้องแวะ Firebase แล้ว
+                    const res = await callGAS('getStudentFull', { id: lightStu.id, code: lightStu.code });
+                    if (res && res.status === 'success' && res.data) {
+                        fullData = res.data;
                     }
 
                     if (!fullData) {
@@ -5280,47 +5257,8 @@
 
                     const safeStr = (val) => (val !== undefined && val !== null) ? String(val) : '';
 
-                    let stu = {};
-                    if (fullData.code || fullData.nationalId !== undefined) {
-                         stu = fullData; // กรณีส่งมาจาก GAS
-                    } else {
-                         // กรณีมาจาก Firebase
-                         stu = {
-                            id: getSafeVal(fullData, ['id', 'idอ้างอิง']),
-                            code: getSafeVal(fullData, ['เลขประจำตัว', 'code']),
-                            name: getSafeVal(fullData, ['ชื่อ-สกุล', 'name']),
-                            orderNo: getSafeVal(fullData, ['ลำดับ', 'orderno', 'เลขที่']),
-                            nationalId: getSafeVal(fullData, ['เลขประจำตัวประชาชน', 'nationalid']),
-                            dob: getSafeVal(fullData, ['วันเกิด', 'dob']),
-                            religion: getSafeVal(fullData, ['ศาสนา', 'religion']),
-                            studentTel: getSafeVal(fullData, ['เบอร์โทรศัพท์นักเรียน', 'studenttel']),
-                            weight: getSafeVal(fullData, ['น้ำหนัก', 'weight']),
-                            height: getSafeVal(fullData, ['ส่วนสูง', 'height']),
-                            bmi: getSafeVal(fullData, ['ค่าbmi', 'bmi']),
-                            bmiTranslation: getSafeVal(fullData, ['แปลผลbmi', 'bmitranslation']),
-                            congenitalDisease: getSafeVal(fullData, ['โรคประจำตัว', 'congenitaldisease']),
-                            regularMedicine: getSafeVal(fullData, ['ยาที่ทานประจำ', 'regularmedicine']),
-                            disability: getSafeVal(fullData, ['ความพิการ', 'disability']),
-                            fatherName: getSafeVal(fullData, ['ชื่อบิดา', 'fathername']),
-                            fatherTel: getSafeVal(fullData, ['เบอร์โทรศัพท์บิดา', 'fathertel']),
-                            fatherOccupation: getSafeVal(fullData, ['อาชีพบิดา', 'fatheroccupation']),
-                            fatherIncome: getSafeVal(fullData, ['รายได้บิดาต่อเดือน', 'fatherincome', 'รายได้บิดา']),
-                            motherName: getSafeVal(fullData, ['ชื่อมารดา', 'mothername']),
-                            motherTel: getSafeVal(fullData, ['เบอร์โทรศัพท์มารดา', 'mothertel']),
-                            motherOccupation: getSafeVal(fullData, ['อาชีพมารดา', 'motheroccupation']),
-                            motherIncome: getSafeVal(fullData, ['รายได้มารดาต่อเดือน', 'motherincome', 'รายได้มารดา']),
-                            parentsStatus: getSafeVal(fullData, ['สถานะบิดามารดาปัจจุบัน', 'parentsstatus', 'สถานะบิดามารดา']),
-                            livingWith: getSafeVal(fullData, ['ปัจจุบันอาศัยอยู่กับ', 'livingwith', 'อาศัยอยู่กับ']),
-                            parentName: getSafeVal(fullData, ['ชื่อผู้ปกครอง', 'parentname']),
-                            parentRelation: getSafeVal(fullData, ['ความเกี่ยวข้องเป็น', 'parentrelation', 'ความเกี่ยวข้อง']),
-                            parentTel: getSafeVal(fullData, ['เบอร์ผู้ปกครอง', 'parenttel', 'เบอร์โทรผู้ปกครอง']),
-                            parentOccupation: getSafeVal(fullData, ['อาชีพผู้ปกครอง', 'parentoccupation']),
-                            parentWorkplace: getSafeVal(fullData, ['สถานที่', 'parentworkplace', 'สถานที่ทำงาน']),
-                            parentIncome: getSafeVal(fullData, ['รายได้ผู้ปกครองที่ไม่ใช่บิดามารดา', 'รายได้ผู้ปกครอง', 'parentincome']),
-                            address: getSafeVal(fullData, ['ที่อยู่', 'address']),
-                            photoBase64: getSafeVal(fullData, ['รูปถ่าย_base64', 'photobase64', 'รูปถ่ายbase64', 'รูปถ่าย'])
-                         };
-                    }
+                    // นำข้อมูลจาก GAS มายัดใส่ Object โดยตรง
+                    let stu = fullData; 
 
                     let rawParentTel = safeStr(stu.parentTel || stu.parentPhone || stu.phone || stu.parent_tel || stu['เบอร์ผู้ปกครอง'] || stu['เบอร์โทรผู้ปกครอง']);
                     
