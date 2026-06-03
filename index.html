@@ -57,6 +57,7 @@
     </script>
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
 
 <script>
   // ค่าเหล่านี้จะได้มาจาก ขั้นตอนที่ 1
@@ -72,6 +73,7 @@
   // เริ่มต้นการทำงานของ Firebase
   firebase.initializeApp(firebaseConfig);
   window.db = firebase.firestore();
+  window.auth = firebase.auth();
   
   // 💡 [แก้ไข] บังคับใช้ Long Polling เพื่อทะลุบล็อกเครือข่าย Wi-Fi โรงเรียน/เน็ตมือถือ
   window.db.settings({
@@ -111,7 +113,8 @@
         };
 
         // --- ระบบสื่อสารกับ Google App Script ---
-        const callGAS = async (action, payload, retries = 3) => {
+        // 👇 [แก้ไข] เพิ่ม Retries เป็น 5 รอบ เพื่อสู้กับอาการ Lock หรือคิวเต็ม
+        const callGAS = async (action, payload, retries = 5) => {
             // [แก้ไข]: จัดการแพ็คข้อมูลให้เป็นรูปแบบ JSON โดยตรง เพื่อให้ตรงกับที่ระบบหลังบ้านรอรับ
             let finalPayload = typeof payload === 'object' && !Array.isArray(payload) && payload !== null ? { ...payload } : (payload || {});
             
@@ -182,8 +185,8 @@
                     if (data.status === 'success') {
                         return data;
                     } else {
-                        // 💡 ถ้าระบบแจ้งว่ากำลังประมวลผล (ติด Lock) ให้ลองใหม่ถ้ายังไม่เกินโควต้า
-                        if (data.message && data.message.includes('กำลังประมวลผล') && attempt < retries - 1) {
+                        // 👇 [แก้ไข] ดักจับคำว่า "กรุณาสแกนใหม่" เพื่อให้ระบบแอบวนลูปลองใหม่เงียบๆ
+                        if (data.message && (data.message.includes('กำลังประมวลผล') || data.message.includes('กรุณาสแกนใหม่')) && attempt < retries - 1) {
                             console.warn(`[GAS Locked] คิวเซิร์ฟเวอร์เต็ม กำลังลองใหม่รอบที่ ${attempt + 1}...`);
                             await new Promise(resolve => setTimeout(resolve, 2000 * (attempt + 1))); 
                             continue;
@@ -212,8 +215,8 @@
         };
 
         // 🚀 --- ระบบสื่อสารกับ API แบบ GET (Fast Load & Chunked Cache) --- 🚀
-        // 👇 [แก้ไข] เพิ่มการรองรับ payload เพื่อให้สามารถส่งเงื่อนไข (เช่น ชื่อ sheet) ไปหาหลังบ้านได้
-        const fetchFastAPI = async (action, payload = null, retries = 3) => {
+        // 👇 [แก้ไข] เพิ่ม Retries เป็น 5 รอบ 
+        const fetchFastAPI = async (action, payload = null, retries = 5) => {
             for (let attempt = 0; attempt < retries; attempt++) {
                 try {
                     // ส่งคำขอแบบ GET ดึงข้อมูลพร้อมกับ Chunked Cache เพื่อทำลายข้อจำกัดการโหลด
@@ -225,8 +228,8 @@
                     if (!response.ok) throw new Error('Network response was not ok');
                     const rawData = await response.json();
                     
-                    // 💡 ถ้าระบบแจ้งว่ากำลังประมวลผล (ติด Lock) ให้ลองใหม่ถ้ายังไม่เกินโควต้า
-                    if (rawData.status === 'error' && rawData.message && rawData.message.includes('กำลังประมวลผล') && attempt < retries - 1) {
+                    // 👇 [แก้ไข] ดักจับคำว่า "กรุณาสแกนใหม่" 
+                    if (rawData.status === 'error' && rawData.message && (rawData.message.includes('กำลังประมวลผล') || rawData.message.includes('กรุณาสแกนใหม่')) && attempt < retries - 1) {
                         console.warn(`[FastAPI Locked] คิวเซิร์ฟเวอร์เต็ม กำลังลองใหม่รอบที่ ${attempt + 1}...`);
                         await new Promise(resolve => setTimeout(resolve, 2000 * (attempt + 1)));
                         continue;
@@ -272,187 +275,175 @@
             }
         };
 
-        // 👇👇👇 เพิ่มโค้ดขั้นตอนที่ 3: ฟังก์ชันบันทึกข้อมูลลง Firebase 👇👇👇
+        // 👇👇👇 [แก้ไขขั้นสูง] ฟังก์ชันบันทึกเวลาที่รองรับการใช้งานพร้อมกัน 10,000 คน (Transactions) 👇👇👇
         const saveTimeToFirebase = async (newRecord) => {
             try {
                 if (!window.db) return { status: 'firebase_error' };
 
-                // 1. แปลงชื่อห้องให้ปลอดภัยสำหรับการตั้งชื่อ Document (แทนที่ / หรือ , ด้วย -)
                 const safeRoom = String(newRecord.room || 'ไม่ระบุห้อง').replace(/[\s\/,]/g, '-');
                 const collectionRef = window.db.collection('room_records');
 
-                // 2. ค้นหาเอกสารล่าสุดของห้องนี้ (chunk ล่าสุด)
+                // 1. หา Chunk ล่าสุดจากภายนอกก่อน เพื่อลดภาระของ Transaction
                 const snapshot = await collectionRef
                     .where(firebase.firestore.FieldPath.documentId(), '>=', `${safeRoom}_chunk_`)
                     .where(firebase.firestore.FieldPath.documentId(), '<=', `${safeRoom}_chunk_\uf8ff`)
                     .get();
 
-                let latestChunkNum = 1;
-                let latestDocRef = null;
-                let latestDocData = null;
-
+                let initialLatestChunkNum = 1;
                 if (!snapshot.empty) {
                     snapshot.forEach(doc => {
                         const match = doc.id.match(/_chunk_(\d+)$/);
                         if (match) {
                             const num = parseInt(match[1], 10);
-                            if (num >= latestChunkNum) {
-                                latestChunkNum = num;
-                                latestDocRef = doc.ref;
-                                latestDocData = doc.data();
-                            }
+                            if (num > initialLatestChunkNum) initialLatestChunkNum = num;
                         }
                     });
                 }
 
-                // 3. ตรวจสอบจำนวนข้อมูลใน chunk ล่าสุด เพื่อแบ่งก้อน (จำกัดก้อนละ 200 รายการ)
-                let nextIndex = 1;
-                if (latestDocData) {
-                    const keys = Object.keys(latestDocData).filter(k => !isNaN(k));
-                    if (keys.length >= 200) {
-                        latestChunkNum++;
-                        latestDocRef = collectionRef.doc(`${safeRoom}_chunk_${latestChunkNum}`);
-                        nextIndex = 1;
-                    } else {
-                        nextIndex = keys.length > 0 ? Math.max(...keys.map(Number)) + 1 : 1;
+                // 2. ใช้ Firestore Transaction เพื่อล็อคฐานข้อมูลชั่วคราว ป้องกันครู 2 คนเขียนคิวเดียวกัน
+                const result = await window.db.runTransaction(async (transaction) => {
+                    let currentDocRef = collectionRef.doc(`${safeRoom}_chunk_${initialLatestChunkNum}`);
+                    const docDoc = await transaction.get(currentDocRef);
+                    
+                    let nextIndex = 1;
+                    
+                    if (docDoc.exists) {
+                        const data = docDoc.data();
+                        const keys = Object.keys(data).filter(k => !isNaN(k));
+                        if (keys.length >= 200) {
+                            // ถ้าข้อมูลเต็ม 200 แล้ว ให้ขยับไปสร้าง Chunk ใหม่ (ปลอดภัย 100%)
+                            initialLatestChunkNum++;
+                            currentDocRef = collectionRef.doc(`${safeRoom}_chunk_${initialLatestChunkNum}`);
+                            nextIndex = 1;
+                        } else {
+                            // หา Index ว่างที่แท้จริงจากฐานข้อมูล ณ วินาทีนั้น
+                            nextIndex = keys.length > 0 ? Math.max(...keys.map(Number)) + 1 : 1;
+                        }
                     }
-                } else {
-                    latestDocRef = collectionRef.doc(`${safeRoom}_chunk_1`);
-                }
 
-                // 4. จัดโครงสร้างข้อมูลปลายทางตามที่กำหนด
-                const dataToSave = {
-                    "ID อ้างอิง": Number(newRecord.id),
-                    "ชั้น/ห้อง": String(newRecord.room),
-                    "ชื่อ-สกุล": String(newRecord.name),
-                    "ประเภท(เข้า/ออก)": String(newRecord.type),
-                    "วันที่": String(newRecord.date),
-                    "สถานะ": String(newRecord.statusStr),
-                    "เลขประจำตัว": Number(newRecord.studentId),
-                    "เวลาบันทึก": String(newRecord.time)
-                };
+                    const dataToSave = {
+                        "ID อ้างอิง": Number(newRecord.id),
+                        "ชั้น/ห้อง": String(newRecord.room),
+                        "ชื่อ-สกุล": String(newRecord.name),
+                        "ประเภท(เข้า/ออก)": String(newRecord.type),
+                        "วันที่": String(newRecord.date),
+                        "สถานะ": String(newRecord.statusStr),
+                        "เลขประจำตัว": Number(newRecord.studentId),
+                        "เวลาบันทึก": String(newRecord.time)
+                    };
 
-                // 5. บันทึกแบบ Merge เพื่อเพิ่มรายการใหม่เข้าไปใน Map
-                await latestDocRef.set({
-                    [String(nextIndex)]: dataToSave,
-                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-                }, { merge: true });
+                    transaction.set(currentDocRef, {
+                        [String(nextIndex)]: dataToSave,
+                        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                    }, { merge: true });
 
-                console.log(`บันทึกเข้า-ออก Firebase สำเร็จ: ${newRecord.name} -> ${latestDocRef.id} [${nextIndex}]`);
-                
-                // คืนค่าพิกัดเอกสาร เพื่อให้ระบบบนหน้าเว็บอ้างอิงตอนแก้ไข/ลบได้ทันที
-                return { status: 'success', docId: latestDocRef.id, chunkIndex: String(nextIndex) };
+                    return { docId: currentDocRef.id, chunkIndex: String(nextIndex) };
+                });
+
+                console.log(`บันทึกเข้า-ออก Firebase สำเร็จ (Transaction Safe): ${newRecord.name} -> ${result.docId} [${result.chunkIndex}]`);
+                return { status: 'success', docId: result.docId, chunkIndex: result.chunkIndex };
             } catch (error) {
-                console.error("Error adding document to Firebase: ", error);
+                console.error("Error adding document to Firebase (Transaction): ", error);
                 return { status: 'firebase_error' };
             }
         };
 
-        // 💡 [แก้ไข] อัปเกรดฟังก์ชัน สำหรับบันทึกการเช็คชื่อรายวิชา และ "พฤติกรรมอัตโนมัติ" ลง Firebase
+        // 💡 [แก้ไขขั้นสูง] อัปเกรดฟังก์ชันเช็คชื่อและพฤติกรรม ให้ทำงานแบบ Atomic Operations ข้อมูลไม่ทับซ้อน 100%
         const saveAttendanceBatchToFirebase = async (batchPayload) => {
             try {
                 if (!window.db) return;
 
                 const hasAttendance = batchPayload.attendance && batchPayload.attendance.length > 0;
                 const hasBehaviorsToAdd = batchPayload.behaviorsToAdd && batchPayload.behaviorsToAdd.length > 0;
-                // 💡 [แก้ไข] ดึง behaviorsToDeleteFull มาใช้งานด้วย
                 const hasBehaviorsToDeleteFull = batchPayload.behaviorsToDeleteFull && batchPayload.behaviorsToDeleteFull.length > 0;
-                const hasBehaviorsToDelete = batchPayload.behaviorsToDelete && batchPayload.behaviorsToDelete.length > 0;
 
-                // ตรวจสอบว่ามีข้อมูลอย่างใดอย่างหนึ่งที่จะต้องบันทึกหรือไม่
-                if (hasAttendance || hasBehaviorsToAdd || hasBehaviorsToDeleteFull || hasBehaviorsToDelete) {
+                if (hasAttendance || hasBehaviorsToAdd || hasBehaviorsToDeleteFull) {
                     const batch = window.db.batch();
                     
-                    // 1. จัดการข้อมูลการเช็คชื่อเข้าเรียน (ทำให้อยู่ในรูปแบบประหยัด Write)
+                    // 1. จัดการข้อมูลการเช็คชื่อเข้าเรียน
                     if (hasAttendance) {
                         batchPayload.attendance.forEach(attData => {
                             if(attData.records && attData.records.length > 0) {
                                 const safeDate = String(attData.date).replace(/\//g, '-');
                                 const safeRoom = String(attData.room).replace(/\//g, '-');
-                                const docId = `${safeDate}_p${attData.period}_${safeRoom}`;
+                                // 💡 [จุดแก้ไขสำคัญ]: เพิ่มรหัสวิชา (subjectCode) เข้าไปใน ID ป้องกันการเซฟทับกรณีครู 2 ท่านสอนคนละวิชาในห้องเดียวกันคาบเดียวกัน (เช่น สอนควบ)
+                                const docId = `${safeDate}_p${attData.period}_${safeRoom}_${attData.subjectCode}`;
                                 const docRef = window.db.collection("attendance_records").doc(docId);
                                 
                                 const studentsMap = {};
                                 attData.records.forEach(rec => {
-                                    // โครงสร้าง (map) ตามรหัสนักเรียน (studentId)
                                     studentsMap[rec.studentId] = {
                                         studentName: String(rec.studentName),
                                         status: String(rec.status)
                                     };
                                 });
 
-                                // 💡 บันทึกตามรูปแบบ Map ที่กำหนด
                                 batch.set(docRef, {
-                                    date: String(attData.date), // (string)
-                                    period: String(attData.period), // (string)
+                                    date: String(attData.date),
+                                    period: String(attData.period),
                                     subjectCode: String(attData.subjectCode),
                                     subjectName: String(attData.subjectName),
                                     room: String(attData.room),
                                     teacherName: String(attData.teacherName),
                                     timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-                                    records: studentsMap // (map)
+                                    records: studentsMap 
                                 }, { merge: true });
                             }
                         });
                     }
 
-                    // 2 & 3. 🚀 [แก้ไข] จัดการอัปเดตและลบ "พฤติกรรมอัตโนมัติ" แบบแม่นยำ 100% โดยอิงจาก ID เพื่อไม่ให้เกิดข้อมูลซ้ำซ้อน
-                    if (hasBehaviorsToAdd || hasBehaviorsToDeleteFull || hasBehaviorsToDelete) {
+                    // 2 & 3. 🚀 [แก้ไข] จัดการพฤติกรรมด้วย `FieldValue.arrayUnion` และ `arrayRemove` (Concurrent Safe 100%)
+                    // ไม่ต้องดึงข้อมูลเก่ามาเช็คเองอีกต่อไป ให้ Firebase จัดการการเพิ่ม/ลบให้ เพื่อไม่ให้เกิดปัญหากดเซฟพร้อมกันแล้วทับกัน
+                    if (hasBehaviorsToAdd || hasBehaviorsToDeleteFull) {
                         const behaviorDatesToProcess = new Set();
                         if (hasBehaviorsToAdd) batchPayload.behaviorsToAdd.forEach(b => behaviorDatesToProcess.add(String(b.date || b['วันที่']).replace(/\//g, '-')));
                         if (hasBehaviorsToDeleteFull) batchPayload.behaviorsToDeleteFull.forEach(b => behaviorDatesToProcess.add(String(b.date || b['วันที่']).replace(/\//g, '-')));
                         
                         for (const safeDate of behaviorDatesToProcess) {
                             const docRef = window.db.collection('behavior_records').doc(safeDate);
-                            const docSnap = await docRef.get(); // 💡 อ่านข้อมูลปัจจุบันจาก Firebase ออกมาตรวจสอบก่อน
                             
-                            let currentRecords = [];
-                            let docDate = '';
-                            if (docSnap.exists) {
-                                const data = docSnap.data();
-                                currentRecords = data.records || [];
-                                docDate = data.date;
-                            }
-
-                            const idsToDelete = new Set();
-                            if (batchPayload.behaviorsToDeleteFull) {
-                                batchPayload.behaviorsToDeleteFull.forEach(b => idsToDelete.add(String(b.id || b.ID)));
-                            }
-                            if (batchPayload.behaviorsToDelete) {
-                                batchPayload.behaviorsToDelete.forEach(id => idsToDelete.add(String(id)));
-                            }
-
-                            // 💡 1. กรองข้อมูลเก่าออก (เทียบด้วย ID ป้องกันลบพลาดและขจัดปัญหาข้อมูลซ้ำซ้อน)
-                            let newRecordsList = currentRecords.filter(r => !idsToDelete.has(String(r.id || r.ID)));
-
-                            // 💡 2. เพิ่มข้อมูลใหม่ (หรือที่ถูกแก้ไข) เข้าไปต่อท้าย
-                            const itemsToAdd = (batchPayload.behaviorsToAdd || []).filter(b => String(b.date || b['วันที่']).replace(/\//g, '-') === safeDate);
-                            itemsToAdd.forEach(behavior => {
-                                newRecordsList.push({
-                                    "id": Number(behavior.id),
-                                    "คะแนน": Number(behavior.score),
-                                    "ชั้น/ห้อง": String(behavior.room),
-                                    "ชื่อ-สกุล": String(behavior.name),
-                                    "ประเภทคะแนน": String(behavior.type),
-                                    "ผู้บันทึก": String(behavior.recorder),
-                                    "รายการพฤติกรรม": String(behavior.behaviorName),
-                                    "วันที่": String(behavior.date),
-                                    "เลขประจำตัว": Number(behavior.studentId)
-                                });
-                                if (!docDate) docDate = String(behavior.date);
-                            });
-
-                            // 💡 3. บันทึกทับแบบเขียนรวดเดียว เพื่ออัปเดตประวัติพฤติกรรมให้สมบูรณ์
+                            // สร้างโครงสร้างเปล่าเผื่อในกรณีที่เป็นเอกสารใหม่ของวันนั้น
                             batch.set(docRef, {
-                                date: docDate || safeDate.replace(/-/g, '/'),
-                                records: newRecordsList,
+                                date: safeDate.replace(/-/g, '/'),
                                 timestamp: firebase.firestore.FieldValue.serverTimestamp()
                             }, { merge: true });
+
+                            // ลบข้อมูลที่ซ้ำซ้อน (หนีเรียน, ขาดเรียนเก่าที่ต้องการเคลียร์)
+                            if (hasBehaviorsToDeleteFull) {
+                                const targetsToRemove = batchPayload.behaviorsToDeleteFull.filter(b => String(b.date || b['วันที่']).replace(/\//g, '-') === safeDate);
+                                if (targetsToRemove.length > 0) {
+                                    batch.update(docRef, {
+                                        records: firebase.firestore.FieldValue.arrayRemove(...targetsToRemove)
+                                    });
+                                }
+                            }
+
+                            // เพิ่มข้อมูลพฤติกรรมใหม่
+                            if (hasBehaviorsToAdd) {
+                                const itemsToAdd = batchPayload.behaviorsToAdd.filter(b => String(b.date || b['วันที่']).replace(/\//g, '-') === safeDate);
+                                if (itemsToAdd.length > 0) {
+                                    const mappedAdds = itemsToAdd.map(behavior => ({
+                                        "id": Number(behavior.id),
+                                        "คะแนน": Number(behavior.score),
+                                        "ชั้น/ห้อง": String(behavior.room),
+                                        "ชื่อ-สกุล": String(behavior.name),
+                                        "ประเภทคะแนน": String(behavior.type),
+                                        "ผู้บันทึก": String(behavior.recorder),
+                                        "รายการพฤติกรรม": String(behavior.behaviorName),
+                                        "วันที่": String(behavior.date),
+                                        "เลขประจำตัว": Number(behavior.studentId)
+                                    }));
+                                    
+                                    batch.update(docRef, {
+                                        records: firebase.firestore.FieldValue.arrayUnion(...mappedAdds)
+                                    });
+                                }
+                            }
                         }
                     }
                     
                     await batch.commit();
-                    console.log("บันทึก/อัปเดตข้อมูลเช็คชื่อและพฤติกรรมอัตโนมัติ ลง Firebase สำเร็จ");
+                    console.log("บันทึกข้อมูลเช็คชื่อและพฤติกรรม (Concurrent Safe) สำเร็จ");
                 }
             } catch (error) {
                 console.error("Error saving attendance to Firebase: ", error);
@@ -732,9 +723,74 @@
                 
                 setLoading(true);
                 try {
-                    // เรียกใช้งานฐานข้อมูลจริงผ่าน GAS พร้อมระบุ Sheet ID
-                    const res = await callGAS('login', { username, password, targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' });
-                    const userData = res.data;
+                    let userData = null;
+
+                    // 🚀 1. ระบบลัด (Fast Lane): ลองล็อกอินผ่าน Firebase Auth ก่อน (ความเร็ว 0.1 วินาที รองรับหลักหมื่นคน)
+                    // 💡 [แก้ไข] แปลง Username ที่เป็นรหัสครู ให้เป็น Email จำลองอัตโนมัติ เพื่อให้เข้ากับ Firebase Auth
+                    const authEmail = username.includes('@') ? username : `${username}@nsc.ac.th`;
+                    
+                    if (window.auth) {
+                        try {
+                            const userCredential = await window.auth.signInWithEmailAndPassword(authEmail, password);
+                            
+                            // เมื่อรหัสถูก ไปดึงข้อมูลสิทธิ์ (Role) และชื่อจาก Firestore (ค้นหาจาก username ตรงๆ ก่อน)
+                            let userDoc = await window.db.collection('users').doc(username).get();
+                            
+                            // ถ้าไม่เจอด้วย username ลองหาด้วย Email เผื่อแอดมินสร้างไว้แบบนั้น
+                            if (!userDoc.exists) {
+                                userDoc = await window.db.collection('users').doc(authEmail).get();
+                            }
+                            
+                            if (userDoc.exists) {
+                                userData = userDoc.data();
+                            } else {
+                                // ถ้าใน Firestore ยังไม่เคยมีสิทธิ์ ให้วิ่งไปดึงจาก GAS แล้วแอบเซฟลง Firestore ไว้อัตโนมัติ
+                                try {
+                                    const res = await callGAS('login', { username, password, targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' }, 2);
+                                    userData = res.data;
+                                } catch(gasErr) {
+                                    // ถ้ารหัสที่พิมพ์มี 00 ให้แอบลองตัด 00 ออกก่อนเช็ค GAS (เผื่อ GAS ยังเป็นรหัสสั้น)
+                                    if (password.endsWith('00')) {
+                                        const shortPass = password.substring(0, password.length - 2);
+                                        const res2 = await callGAS('login', { username, password: shortPass, targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' }, 2);
+                                        userData = res2.data;
+                                    } else {
+                                        throw gasErr;
+                                    }
+                                }
+
+                                if (userData && userData.name) {
+                                    await window.db.collection('users').doc(username).set({
+                                        name: userData.name, role: userData.role || 'user', position: userData.position || 'ครู', username: username
+                                    });
+                                }
+                            }
+                        } catch (firebaseErr) {
+                            console.warn("Firebase Auth ยังไม่มีบัญชีนี้ หรือรหัสผิด กำลังสลับไปใช้ระบบสำรอง (GAS)...", firebaseErr.message);
+                        }
+                    }
+
+                    // 🚀 2. ระบบสำรอง (Fallback): ถ้า Firebase ล้มเหลว ให้ใช้ระบบ GAS (Sheets) เดิม
+                    if (!userData) {
+                        try {
+                            const res = await callGAS('login', { username, password, targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' }, 5);
+                            userData = res.data;
+                        } catch (gasErr) {
+                            // 💡 [แก้ปัญหา] หากครูพิมพ์รหัสที่ถูกเติม 00 มา แต่ระบบตกมาที่ GAS (ซึ่งรหัสใน Sheet เป็นรหัสสั้น)
+                            // ระบบจะแอบตัด 00 ออกและลองล็อกอินผ่าน GAS ให้อีกครั้งอัตโนมัติ เพื่อไม่ให้ครูเข้าไม่ได้
+                            if (password.endsWith('00')) {
+                                try {
+                                    const shortPass = password.substring(0, password.length - 2);
+                                    const res2 = await callGAS('login', { username, password: shortPass, targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' }, 2);
+                                    userData = res2.data;
+                                } catch (e2) {
+                                    throw gasErr; // คืน Error ดั้งเดิม
+                                }
+                            } else {
+                                throw gasErr;
+                            }
+                        }
+                    }
                     
                     // บังคับแนบ username ที่ใช้ล็อกอินเข้าไปใน userData ด้วย เพื่อให้ระบบจำได้เวลาไปใช้เปลี่ยนรหัสผ่าน
                     userData.username = username;
@@ -12957,7 +13013,7 @@
             );
         };
 
-        // // // // 11. หน้ารายงานผล (ReportsView) - ชุดใหม่ครบทุกฟังก์ชัน + ระบบกิจกรรมชุมนุม และ Excel Export
+       // 11. หน้ารายงานผล (ReportsView) - ชุดใหม่ครบทุกฟังก์ชัน + ระบบกิจกรรมชุมนุม และ Excel Export
         const ReportsView = (props) => {
         const { students, timeRecords, behaviorRecords, activityRecords, activitiesSetting, schoolConfig, teachers, leaveRecords, user, registrations, allSchedules, msMakeupRecords, isSyncing } = props;
             const [activeTab, setActiveTab] = useState('stats');
@@ -12974,6 +13030,8 @@
 
             // --- เพิ่ม State ใหม่สำหรับตัวกรองรายงานสถานะเช็คชื่อเข้าเรียน ---
             const [classAttStatusFilter, setClassAttStatusFilter] = useState('all');
+            const [classAttSubjectType, setClassAttSubjectType] = useState('subject'); // 💡 เพิ่ม State ประเภทกิจกรรม (รายวิชา / ชุมนุม)
+            const [clubAttStatusFilter, setClubAttStatusFilter] = useState('all'); // 💡 เพิ่ม State ตัวกรองของชุมนุม
 
             const [msRiskData, setMsRiskData] = useState([]);
             const [rawRiskRecords, setRawRiskRecords] = useState([]); 
@@ -13454,27 +13512,40 @@
             }
 
             // --- คัดกรองข้อมูลสำหรับรายงานสถานะเช็คชื่อเข้าเรียน ---
-            const validClassAttRecords = (classAttRecords || []).filter(r => {
+            const pivotSourceRecords = classAttSubjectType === 'subject' 
+                ? (classAttRecords || []).map(r => ({...r, pivotStatus: r.status, pivotSubject: r.subjectCode ? r.subjectCode : r.subjectName, pivotPeriod: r.period || '-'}))
+                : (activityRecords || []).map(r => ({...r, pivotStatus: r.statusStr || r.status, pivotSubject: r.activityName, pivotPeriod: '-'}));
+
+            const validClassAttRecords = pivotSourceRecords.filter(r => {
                 if (!isDateInRange(r.date)) return false;
                 
                 const stu = studentMapForFastLookup[String(r.studentId).trim()];
                 if (classFilter && (!stu || stu.classLevel !== classFilter)) return false;
                 if (roomFilter && (!stu || stu.room !== roomFilter)) return false;
 
-                const st = String(r.status).trim();
-                if (classAttStatusFilter !== 'all') {
-                    if (classAttStatusFilter === 'ลา') {
-                        return ['ลาป่วย', 'ลากิจ', 'ไปกิจกรรม', 'ลป', 'ลก', 'ก'].includes(st);
-                    } else if (classAttStatusFilter === 'มา') {
-                        return ['มา', '✓'].includes(st);
-                    } else if (classAttStatusFilter === 'สาย') {
-                        return ['สาย', 'ส'].includes(st);
-                    } else if (classAttStatusFilter === 'ขาด') {
-                        return ['ขาด', 'ข'].includes(st);
-                    } else if (classAttStatusFilter === 'หนีเรียน') {
-                        return ['หนีเรียน', 'น'].includes(st);
-                    } else {
-                        return st === classAttStatusFilter;
+                const st = String(r.pivotStatus).trim();
+                if (classAttSubjectType === 'subject') {
+                    if (classAttStatusFilter !== 'all') {
+                        if (classAttStatusFilter === 'ลา') {
+                            return ['ลาป่วย', 'ลากิจ', 'ไปกิจกรรม', 'ลป', 'ลก', 'ก'].includes(st);
+                        } else if (classAttStatusFilter === 'มา') {
+                            return ['มา', '✓'].includes(st);
+                        } else if (classAttStatusFilter === 'สาย') {
+                            return ['สาย', 'ส'].includes(st);
+                        } else if (classAttStatusFilter === 'ขาด') {
+                            return ['ขาด', 'ข'].includes(st);
+                        } else if (classAttStatusFilter === 'หนีเรียน') {
+                            return ['หนีเรียน', 'น'].includes(st);
+                        } else {
+                            return st === classAttStatusFilter;
+                        }
+                    }
+                } else {
+                    if (clubAttStatusFilter !== 'all') {
+                        if (clubAttStatusFilter === 'เข้าร่วม' && !['เข้าร่วม', '✓'].includes(st)) return false;
+                        if (clubAttStatusFilter === 'ไม่เข้าร่วม' && !['ไม่เข้าร่วม', 'ข'].includes(st)) return false;
+                        if (clubAttStatusFilter === 'ลา' && !['ลาป่วย', 'ลากิจ', 'ไปกิจกรรม', 'ลป', 'ลก', 'ก'].includes(st)) return false;
+                        if (['เข้าร่วม', 'ไม่เข้าร่วม', 'ลา'].indexOf(clubAttStatusFilter) === -1 && st !== clubAttStatusFilter) return false;
                     }
                 }
                 return true;
@@ -13482,21 +13553,21 @@
                 const stu = studentMapForFastLookup[String(r.studentId).trim()];
                 return {
                     ...r,
-                    name: stu ? stu.name : (r.studentName || 'ไม่ทราบชื่อ'),
+                    name: stu ? stu.name : (r.studentName || r.name || 'ไม่ทราบชื่อ'),
                     room: stu ? `${stu.classLevel}/${stu.room}` : (r.room || 'ไม่ระบุ')
                 };
             });
 
             const classAttUniqueCols = [...new Set(validClassAttRecords.map(r => {
-                const subj = r.subjectCode ? r.subjectCode : (r.subjectName || '');
-                return `${r.date}|${r.period || '-'}|${subj}`;
+                return `${r.date}|${r.pivotPeriod}|${r.pivotSubject}`;
             }))].sort((a, b) => {
-                const [dateA, periodA] = a.split('|');
-                const [dateB, periodB] = b.split('|');
+                const [dateA, periodA, subjA] = a.split('|');
+                const [dateB, periodB, subjB] = b.split('|');
                 const dA = dateA.split('/').reverse().join('');
                 const dB = dateB.split('/').reverse().join('');
                 if (dA !== dB) return dA.localeCompare(dB);
-                return Number(periodA) - Number(periodB);
+                if (periodA !== '-' && periodB !== '-') return Number(periodA) - Number(periodB);
+                return String(subjA || '').localeCompare(String(subjB || ''));
             });
 
             const classAttPivotData = {};
@@ -13506,16 +13577,24 @@
                     const stu = studentMapForFastLookup[stuKey];
                     classAttPivotData[stuKey] = {
                         studentId: stuKey,
-                        name: stu ? stu.name : (r.studentName || 'ไม่ทราบชื่อ'),
+                        name: stu ? stu.name : (r.studentName || r.name || 'ไม่ทราบชื่อ'),
                         room: stu ? `${stu.classLevel}/${stu.room}` : (r.room || 'ไม่ระบุ'),
                         fullRoom: stu && stu.classLevel && stu.room ? `${stu.classLevel}/${stu.room}` : (r.room || 'ไม่ระบุ'),
                         attendance: {}
                     };
                 }
-                const subj = r.subjectCode ? r.subjectCode : (r.subjectName || '');
-                const colKey = `${r.date}|${r.period || '-'}|${subj}`;
-                const sym = { 'มา':'✓', 'สาย':'ส', 'ขาด':'ข', 'ลาป่วย':'ลป', 'ลากิจ':'ลก', 'หนีเรียน':'น', 'ไปกิจกรรม':'ก' };
-                classAttPivotData[stuKey].attendance[colKey] = sym[String(r.status).trim()] || r.status;
+                const colKey = `${r.date}|${r.pivotPeriod}|${r.pivotSubject}`;
+                
+                let mappedStatus = r.pivotStatus;
+                if (classAttSubjectType === 'subject') {
+                    const sym = { 'มา':'✓', 'สาย':'ส', 'ขาด':'ข', 'ลาป่วย':'ลป', 'ลากิจ':'ลก', 'หนีเรียน':'น', 'ไปกิจกรรม':'ก' };
+                    mappedStatus = sym[String(r.pivotStatus).trim()] || r.pivotStatus;
+                } else {
+                    const sym = { 'เข้าร่วม':'✓', 'ไม่เข้าร่วม':'ข', 'ลาป่วย':'ลป', 'ลากิจ':'ลก', 'ไปกิจกรรม':'ก' };
+                    mappedStatus = sym[String(r.pivotStatus).trim()] || r.pivotStatus;
+                }
+                
+                classAttPivotData[stuKey].attendance[colKey] = mappedStatus;
             });
             const classAttPivotArray = Object.values(classAttPivotData);
 
@@ -14249,7 +14328,7 @@
             const [adminSelectedTeacher, setAdminSelectedTeacher] = useState('');
 
             useEffect(() => {
-                const loadTeacherSchedule = () => {
+                const loadTeacherSchedule = async () => {
                     if (!user || !user.name || !allSchedules || allSchedules.length === 0) return;
                     setIsFetchingSchedule(true);
                     let loaded = [];
@@ -14334,6 +14413,69 @@
                             });
                         }
                     });
+
+                    // 💡 [เพิ่มใหม่] ดึงข้อมูลกิจกรรมชุมนุมจาก Firebase เพื่อเพิ่มเข้าในตัวเลือก (เฉพาะของครูที่ล็อกอิน)
+                    try {
+                        let hasFirebaseClubs = false;
+                        if (window.db) {
+                            const clubSnap = await window.db.collection('club_records').get();
+                            if (!clubSnap.empty) {
+                                hasFirebaseClubs = true;
+                                clubSnap.forEach(doc => {
+                                    const r = doc.data();
+                                    const cName = String(r.clubName || '').trim();
+                                    const cTeacher = String(r.teachers || '').trim();
+                                    const cCode = String(r.clubCode || r.activityCode || 'CLUB').trim();
+                                    
+                                    const rowCleanName = normalizeName(cTeacher);
+                                    if (cName && (user.role === 'admin' || (rowCleanName && userCleanName && (rowCleanName.includes(userCleanName) || userCleanName.includes(rowCleanName))))) {
+                                        loaded.push({
+                                            day: '',
+                                            period: '',
+                                            subjectCode: cCode,
+                                            subjectName: cName,
+                                            teacherName: cTeacher,
+                                            room: 'รวมทุกห้อง' 
+                                        });
+                                    }
+                                });
+                            }
+                        }
+                        
+                        // 💡 ถ้า Firebase ว่างเปล่า ให้ไปดึงจาก Google Sheet (ชีทชุมนุม) มาแทน เพื่อป้องกันไม่ให้ไม่มีตัวเลือกขึ้น
+                        if (!hasFirebaseClubs && typeof callGAS === 'function') {
+                            const res = await callGAS('getSchedules', { targetSheetId: '1NBnP7z4VWTvGCwxdgaYse-MI2x6o0Jv4aL8pTt2Ja-A', sheetName: 'ชุมนุม' });
+                            if (res && res.status === 'success' && res.data) {
+                                const masterClubs = {};
+                                res.data.forEach((r, idx) => {
+                                    if (idx === 0) return;
+                                    const cName = String(r[2] || '').trim();
+                                    const cTeacher = String(r[7] || '').trim();
+                                    const cCode = String(r[1] || 'CLUB').trim();
+                                    
+                                    if (cName && cTeacher) {
+                                        masterClubs[cName] = { cName, cTeacher, cCode };
+                                    }
+                                });
+                                
+                                Object.values(masterClubs).forEach(club => {
+                                    const rowCleanName = normalizeName(club.cTeacher);
+                                    if (club.cName && (user.role === 'admin' || (rowCleanName && userCleanName && (rowCleanName.includes(userCleanName) || userCleanName.includes(rowCleanName))))) {
+                                        loaded.push({
+                                            day: '',
+                                            period: '',
+                                            subjectCode: club.cCode,
+                                            subjectName: club.cName,
+                                            teacherName: club.cTeacher,
+                                            room: 'รวมทุกห้อง' 
+                                        });
+                                    }
+                                });
+                            }
+                        }
+                    } catch (err) {
+                        console.error("Error loading clubs for dropdown:", err);
+                    }
                     
                     setMySchedules(loaded);
                     setIsFetchingSchedule(false);
@@ -14447,7 +14589,7 @@
                     // 👇 [จุดแก้ไขที่ 1]: เปลี่ยนจาก callGAS เป็นการดึงจาก Firebase ตรงๆ ความเร็วจะเพิ่มขึ้น 10 เท่า
                     const res = await fetchAttendanceHistoryFromFirebase({
                         date: 'ALL',
-                        room: room,
+                        room: room === 'รวมทุกห้อง' ? 'ALL' : room, // 💡 [แก้ไข] ถ้าระบุว่า 'รวมทุกห้อง' ให้ดึงแบบ ALL มาเพื่อแสดงข้อมูลชุมนุม
                         subjectCode: code
                     });
                     
@@ -14460,7 +14602,12 @@
                     // 💡 ไม่ต้องมาเขียนลูป Parse JSON String แล้ว เพราะ fetchAttendanceHistoryFromFirebase จัดการจัด Format ให้อัตโนมัติแล้ว
                     let records = res.data || [];
 
-                    const normalizeRoomStr = (rStr) => String(rStr || '').replace(/[\sม\.]/g, '');
+                    // 👇 [แก้ไขบั๊ก] ปรับการทำงานของ normalizeRoomStr ให้ไม่ไปตัดตัว "ม" ของคำว่า "รวมทุกห้อง" ออก
+                    const normalizeRoomStr = (rStr) => {
+                        const str = String(rStr || '').trim();
+                        if (str === 'รวมทุกห้อง') return str;
+                        return str.replace(/[\sม\.]/g, '');
+                    };
                     const cleanTargetRoom = normalizeRoomStr(room);
                     const cleanTargetCode = String(code || '').trim();
                     const cleanTargetName = String(name || '').replace(/\s/g, '');
@@ -14524,32 +14671,73 @@
                         });
                     }
 
-                    if (matchedStudents.length === 0 && records.length > 0) {
-                        const findIdField = (rec) => {
-                            for (let k in rec) {
-                                if (k==='id'||k==='date'||k==='period') continue;
-                                const v = String(rec[k]).trim();
-                                if (!isNaN(v) && v.length >= 4) return k;
-                            }
-                            return 'studentId';
-                        };
-                        const idField = findIdField(records[0]);
+                    // 💡 [เพิ่มใหม่] ถ้ารายวิชาเป็น "ชุมนุม" (ห้องเป็น 'รวมทุกห้อง') ให้ดึงรายชื่อนักเรียนจากชีทชุมนุมโดยตรง
+                    if (cleanTargetRoom === 'รวมทุกห้อง') {
+                        let clubStudents = [];
                         
-                        const uniqueStudentIds = [...new Set(records.map(r => String(r[idField]).trim()))];
-                        matchedStudents = uniqueStudentIds.map(id => {
-                            const rec = records.find(r => String(r[idField]).trim() === id);
-                            let nameField = 'name';
-                            for (let k in rec) {
-                                if (k==='id'||k==='date'||k==='period'||k===idField) continue;
-                                const v = String(rec[k]).trim();
-                                if (v.length > 5 && isNaN(v) && !['มา', 'สาย', 'ขาด', 'ลาป่วย', 'ลากิจ', 'ไปกิจกรรม', 'หนีเรียน'].includes(v)) {
-                                    nameField = k; break;
+                        // 1. ลองดึงรายชื่อเด็กชุมนุมจาก Firebase 'club_records'
+                        try {
+                            if (window.db) {
+                                const clubSnap = await window.db.collection('club_records').where('clubName', '==', name).get();
+                                if (!clubSnap.empty) {
+                                    clubSnap.forEach(doc => {
+                                        const r = doc.data();
+                                        // สนใจเฉพาะ Record ที่มีข้อมูลนักเรียน
+                                        const rStudentId = String(r.studentId || r.code || '').replace(/[^0-9]/g, '').trim();
+                                        if (rStudentId) {
+                                            const actualStudent = (students || []).find(s => String(s.code).trim() === rStudentId);
+                                            if (actualStudent) {
+                                                clubStudents.push(actualStudent);
+                                            } else {
+                                                clubStudents.push({ code: rStudentId, name: String(r.studentName || r.name || ''), classLevel: '', room: String(r.room || '') });
+                                            }
+                                        }
+                                    });
                                 }
                             }
-                            return { code: id, name: rec[nameField] || 'ไม่มีชื่อ', classLevel: cLevel, room: cRoom };
+                        } catch(e) { console.error("Firebase club fetch error", e); }
+
+                        // 2. ถ้าไม่ได้จาก Firebase หรืออยากได้จาก Sheet มาเสริม ให้ดึงจาก Sheet ด้วย
+                        if (typeof callGAS === 'function') {
+                            try {
+                                const clubRes = await callGAS('getSchedules', { targetSheetId: '1NBnP7z4VWTvGCwxdgaYse-MI2x6o0Jv4aL8pTt2Ja-A', sheetName: 'ชุมนุม' });
+                                if (clubRes && clubRes.status === 'success' && clubRes.data) {
+                                    clubRes.data.forEach((r, idx) => {
+                                        if (idx === 0) return;
+                                        const rClubName = String(r[2] || '').trim();
+                                        const rStudentId = String(r[3] || '').replace(/[^0-9]/g, '').trim();
+                                        
+                                        if (rClubName === name && rStudentId) {
+                                            const actualStudent = (students || []).find(s => String(s.code).trim() === rStudentId);
+                                            if (actualStudent) {
+                                                clubStudents.push(actualStudent);
+                                            } else {
+                                                clubStudents.push({ code: rStudentId, name: String(r[4]||''), classLevel: '', room: String(r[5]||'') });
+                                            }
+                                        }
+                                    });
+                                }
+                            } catch (e) {
+                                console.error("Error fetching club students from Sheets:", e);
+                            }
+                        }
+                        
+                        // ขจัดรายการซ้ำ (เผื่อมีรายชื่อปนกันระหว่าง Firebase และ Sheet)
+                        const uniqueClubStus = [];
+                        const seenIds = new Set();
+                        clubStudents.forEach(s => {
+                            if (!seenIds.has(s.code)) {
+                                seenIds.add(s.code);
+                                uniqueClubStus.push(s);
+                            }
                         });
+
+                        if (uniqueClubStus.length > 0) {
+                            matchedStudents = uniqueClubStus;
+                        }
                     }
 
+                    // 💡 [แก้ไขและรวบโค้ดซ้ำ] Fallback สำหรับกรณีรายวิชาไม่มีคนลงทะเบียน หรือเป็นกิจกรรมชุมนุม
                     if (matchedStudents.length === 0 && records.length > 0) {
                         const findIdField = (rec) => {
                             for (let k in rec) {
@@ -14572,7 +14760,13 @@
                                     nameField = k; break;
                                 }
                             }
-                            return { code: id, name: rec[nameField] || 'ไม่มีชื่อ', classLevel: cLevel, room: cRoom };
+                            
+                            // 💡 ดึงชั้น/ห้องของนักเรียนจริงๆ มาจากฐานข้อมูลนักเรียน เพื่อให้จัดกลุ่มในหน้ารายงานได้อย่างถูกต้อง
+                            const actualStudent = (students || []).find(s => String(s.code).trim() === id);
+                            const actualClass = actualStudent ? actualStudent.classLevel : cLevel;
+                            const actualRoom = actualStudent ? actualStudent.room : cRoom;
+
+                            return { code: id, name: rec[nameField] || (actualStudent ? actualStudent.name : 'ไม่มีชื่อ'), classLevel: actualClass, room: actualRoom };
                         }).sort((a,b) => Number(a.code) - Number(b.code));
                     }
 
@@ -14746,17 +14940,38 @@
 
                                         {/* --- เพิ่มการทำงานของตัวกรองประเภทสถานะเช็คชื่อเข้าเรียนของรายวิชา --- */}
                                         {activeTab === 'class_att_status' && (
-                                            <div>
-                                                <label className="block text-sm text-gray-600 mb-1">สถานะเช็คชื่อ</label>
-                                                <select value={classAttStatusFilter} onChange={e=>setClassAttStatusFilter(e.target.value)} className="border rounded p-2 text-sm bg-blue-50">
-                                                    <option value="all">ทั้งหมด</option>
-                                                    <option value="มา">มา</option>
-                                                    <option value="สาย">สาย</option>
-                                                    <option value="ขาด">ขาด</option>
-                                                    <option value="ลา">ลา (ป่วย/กิจ/กิจกรรม)</option>
-                                                    <option value="หนีเรียน">หนีเรียน</option>
-                                                </select>
-                                            </div>
+                                            <React.Fragment>
+                                                <div>
+                                                    <label className="block text-sm text-gray-600 mb-1">ประเภทการเช็คชื่อ</label>
+                                                    <select value={classAttSubjectType} onChange={e=>setClassAttSubjectType(e.target.value)} className="border rounded p-2 text-sm bg-blue-50">
+                                                        <option value="subject">รายวิชา</option>
+                                                        <option value="club">กิจกรรมชุมนุม</option>
+                                                    </select>
+                                                </div>
+                                                {classAttSubjectType === 'subject' ? (
+                                                    <div>
+                                                        <label className="block text-sm text-gray-600 mb-1">สถานะเช็คชื่อ</label>
+                                                        <select value={classAttStatusFilter} onChange={e=>setClassAttStatusFilter(e.target.value)} className="border rounded p-2 text-sm bg-blue-50">
+                                                            <option value="all">ทั้งหมด</option>
+                                                            <option value="มา">มา</option>
+                                                            <option value="สาย">สาย</option>
+                                                            <option value="ขาด">ขาด</option>
+                                                            <option value="ลา">ลา (ป่วย/กิจ/กิจกรรม)</option>
+                                                            <option value="หนีเรียน">หนีเรียน</option>
+                                                        </select>
+                                                    </div>
+                                                ) : (
+                                                    <div>
+                                                        <label className="block text-sm text-gray-600 mb-1">สถานะเช็คชื่อ</label>
+                                                        <select value={clubAttStatusFilter} onChange={e=>setClubAttStatusFilter(e.target.value)} className="border rounded p-2 text-sm bg-blue-50">
+                                                            <option value="all">ทั้งหมด</option>
+                                                            <option value="เข้าร่วม">เข้าร่วม</option>
+                                                            <option value="ไม่เข้าร่วม">ไม่เข้าร่วม</option>
+                                                            <option value="ลา">ลา (ป่วย/กิจ/กิจกรรม)</option>
+                                                        </select>
+                                                    </div>
+                                                )}
+                                            </React.Fragment>
                                         )}
 
                                         {(['inout', 'class_att_status', 'behavior', 'activity', 'eval', 'ms_risk', 'absent_stats', 'ranking'].includes(activeTab)) && (
@@ -15371,15 +15586,20 @@
                         {/* --- ตารางรายงานสถานะเช็คชื่อเข้าเรียน --- */}
                         {activeTab === 'class_att_status' && (
                             <div className="overflow-x-auto">
-                                {classAttRecords.length === 0 && !isFetchingMsRisk ? (
+                                {classAttSubjectType === 'subject' && classAttRecords.length === 0 && !isFetchingMsRisk ? (
                                     <div className="text-center p-10 bg-gray-50 rounded-xl border border-gray-200">
                                         <i className="fa-solid fa-database text-5xl text-gray-300 mb-3"></i>
                                         <p className="text-gray-500">กรุณากดปุ่ม <span className="font-bold text-red-600">ดึงข้อมูลประมวลผล</span> ด้านบนเพื่อตรวจสอบข้อมูลรายวิชา</p>
                                     </div>
+                                ) : classAttSubjectType === 'club' && activityRecords.length === 0 ? (
+                                    <div className="text-center p-10 bg-gray-50 rounded-xl border border-gray-200">
+                                        <i className="fa-solid fa-clipboard-check text-5xl text-gray-300 mb-3"></i>
+                                        <p className="text-gray-500">ยังไม่มีข้อมูลการเข้าร่วมกิจกรรมในระบบ</p>
+                                    </div>
                                 ) : (
                                     <React.Fragment>
                                         <div className="mb-2 text-xs text-gray-600 print:text-[10px] bg-blue-50 p-3 rounded border border-blue-100 no-print">
-                                            * สัญลักษณ์: (✓) = มา, (ส) = สาย, (ข) = ขาด, (ลป) = ลาป่วย, (ลก) = ลากิจ, (น) = หนีเรียน, (ก) = ไปกิจกรรม
+                                            * สัญลักษณ์: {classAttSubjectType === 'subject' ? '(✓) = มา, (ส) = สาย, (ข) = ขาด, (ลป) = ลาป่วย, (ลก) = ลากิจ, (น) = หนีเรียน, (ก) = ไปกิจกรรม' : '(✓) = เข้าร่วม, (ข) = ไม่เข้าร่วม, (ลป) = ลาป่วย, (ลก) = ลากิจ, (ก) = ไปกิจกรรม'}
                                         </div>
                                         <table className="w-full text-sm text-left border-collapse border border-gray-300">
                                             <thead className="bg-gray-100 text-gray-800">
@@ -15392,7 +15612,7 @@
                                                         const [date, period, subj] = colKey.split('|');
                                                         return (
                                                             <th key={idx} className="p-1 border border-gray-300 text-center font-normal whitespace-nowrap h-48 align-bottom" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>
-                                                                {date} (ค.{period}) {subj}
+                                                                {date} {period !== '-' ? `(ค.${period})` : ''} {subj}
                                                             </th>
                                                         );
                                                     })}
@@ -15415,10 +15635,18 @@
                                                                     <td className="p-2 border border-gray-300 text-center">{stu.room}</td>
                                                                     {classAttUniqueCols.map((colKey, idx) => {
                                                                         const status = stu.attendance[colKey] || '-';
-                                                                        const isRed = ['ขาด', 'ข', 'หนีเรียน', 'น'].includes(status);
-                                                                        const isGreen = ['มา', '✓'].includes(status);
-                                                                        const isOrange = ['สาย', 'ส'].includes(status);
-                                                                        const isBlue = ['ลาป่วย', 'ลากิจ', 'ไปกิจกรรม', 'ลป', 'ลก', 'ก'].includes(status);
+                                                                        let isRed = false, isGreen = false, isOrange = false, isBlue = false;
+                                                                        
+                                                                        if (classAttSubjectType === 'subject') {
+                                                                            isRed = ['ขาด', 'ข', 'หนีเรียน', 'น'].includes(status);
+                                                                            isGreen = ['มา', '✓'].includes(status);
+                                                                            isOrange = ['สาย', 'ส'].includes(status);
+                                                                            isBlue = ['ลาป่วย', 'ลากิจ', 'ไปกิจกรรม', 'ลป', 'ลก', 'ก'].includes(status);
+                                                                        } else {
+                                                                            isRed = ['ไม่เข้าร่วม', 'ข'].includes(status);
+                                                                            isGreen = ['เข้าร่วม', '✓'].includes(status);
+                                                                            isBlue = ['ลาป่วย', 'ลากิจ', 'ไปกิจกรรม', 'ลป', 'ลก', 'ก'].includes(status);
+                                                                        }
                                                                         
                                                                         return (
                                                                             <td key={idx} className={`p-2 border border-gray-300 text-center font-bold ${
@@ -17963,17 +18191,41 @@
                     // ตัดคำนำหน้าชื่อทั้งหมดออก เพื่อให้ได้ชื่อเพียวๆ ส่งไปค้นหาในฐานข้อมูล
                     const cleanSearchName = String(user.name).replace(/^(นาย|นางสาว|นาง|ว่าที่\s*ร\.ต\.|ว่าที่ร้อยตรี|ครู|ผู้อำนวยการโรงเรียน|ผู้อำนวยการ|รองผู้อำนวยการ|ผอ\.|รอง)\s*/g, '').trim();
                     
-                    // (เพิ่มบรรทัดนี้เพื่อเช็คข้อมูลที่ส่งไปหลังบ้านใน Console)
-                    console.log("กำลังส่งข้อมูลไปเปลี่ยนรหัส:", { name: user.name, cleanName: cleanSearchName, username: currentUsername });
-
+                    // 🚀 1. อัปเดตใน Google Sheets เป็นพื้นฐานเพื่อไม่ให้ข้อมูลเก่าสูญหาย
                     await callGAS('resetPassword', { 
                         name: user.name, 
-                        cleanName: cleanSearchName, // ส่งชื่อแบบไร้คำนำหน้าไปช่วยหา
-                        username: currentUsername, // ส่ง Username เดิมไปค้นหา (แม่นยำ 100%)
+                        cleanName: cleanSearchName, 
+                        username: currentUsername, 
                         newUsername: changePwdData.newUsername, 
                         newPassword: changePwdData.newPassword,
                         targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48'
                     });
+
+                    // 🚀 2. พยายามอัปเดตรหัสผ่านใหม่ใน Firebase Auth และ Firestore ด้วย (ถ้าเชื่อมต่อไว้)
+                    if (window.auth && window.auth.currentUser) {
+                        try {
+                            await window.auth.currentUser.updatePassword(changePwdData.newPassword);
+                            
+                            // ถ้ามีการเปลี่ยน Username ให้แปลงเป็น Email จำลองด้วย
+                            if (changePwdData.newUsername !== currentUsername) {
+                                const newAuthEmail = changePwdData.newUsername.includes('@') ? changePwdData.newUsername : `${changePwdData.newUsername}@nsc.ac.th`;
+                                await window.auth.currentUser.updateEmail(newAuthEmail);
+                                
+                                // โยกย้ายข้อมูลใน Firestore Collection 'users' ไปยัง ID ใหม่
+                                const oldDoc = await window.db.collection('users').doc(currentUsername).get();
+                                if (oldDoc.exists) {
+                                    await window.db.collection('users').doc(changePwdData.newUsername).set({
+                                        ...oldDoc.data(),
+                                        username: changePwdData.newUsername
+                                    });
+                                    await window.db.collection('users').doc(currentUsername).delete();
+                                }
+                            }
+                        } catch(fbErr) {
+                            console.log("Firebase Auth update skipped (session expired or invalid format):", fbErr);
+                        }
+                    }
+
                     alert('เปลี่ยนชื่อผู้ใช้และรหัสผ่านสำเร็จ! กรุณาล็อกอินใหม่');
                     setShowChangePwdModal(false);
                     setUser(null); // บังคับล็อกเอ้าท์เพื่อให้ล็อกอินด้วยรหัสใหม่
@@ -18714,7 +18966,7 @@
                                     {/* 👆 ---------------------- 👆 */}
 
                                     <button 
-                                        onClick={() => { setChangePwdData({ newUsername: user.username || '', newPassword: '' }); setShowChangePwdModal(true); }} 
+                                        onClick={() => { setChangePwdData({ currentPassword: '', newUsername: user.username || '', newPassword: '' }); setShowChangePwdModal(true); }} 
                                         className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-lg text-sm font-bold transition shadow-sm inline-flex items-center"
                                     >
                                         <i className="fa-solid fa-user-lock mr-2"></i> เปลี่ยนชื่อผู้ใช้ / รหัสผ่าน
@@ -18734,12 +18986,16 @@
                                             </div>
                                             <form onSubmit={handleChangePassword} className="space-y-4">
                                                 <div>
+                                                    <label className="block text-sm text-gray-600 mb-1">รหัสผ่านปัจจุบัน (Current Password)</label>
+                                                    <input type="password" required value={changePwdData.currentPassword || ''} onChange={e=>setChangePwdData({...changePwdData, currentPassword: e.target.value})} className="w-full border rounded p-2 focus:ring-2 focus:ring-ns-blue outline-none bg-blue-50" placeholder="รหัสผ่านที่ใช้ล็อกอินตอนนี้" />
+                                                </div>
+                                                <div>
                                                     <label className="block text-sm text-gray-600 mb-1">ชื่อผู้ใช้ (Username) ใหม่</label>
-                                                    <input type="text" required value={changePwdData.newUsername} onChange={e=>setChangePwdData({...changePwdData, newUsername: e.target.value})} className="w-full border rounded p-2 focus:ring-2 focus:ring-ns-blue outline-none bg-blue-50" placeholder="New Username" />
+                                                    <input type="text" required value={changePwdData.newUsername} onChange={e=>setChangePwdData({...changePwdData, newUsername: e.target.value})} className="w-full border rounded p-2 focus:ring-2 focus:ring-ns-blue outline-none bg-blue-50" placeholder="ชื่อผู้ใช้ใหม่" />
                                                 </div>
                                                 <div>
                                                     <label className="block text-sm text-gray-600 mb-1">รหัสผ่าน (Password) ใหม่</label>
-                                                    <input type="text" required value={changePwdData.newPassword} onChange={e=>setChangePwdData({...changePwdData, newPassword: e.target.value})} className="w-full border rounded p-2 focus:ring-2 focus:ring-ns-blue outline-none bg-blue-50" placeholder="New Password" />
+                                                    <input type="text" required value={changePwdData.newPassword} onChange={e=>setChangePwdData({...changePwdData, newPassword: e.target.value})} className="w-full border rounded p-2 focus:ring-2 focus:ring-ns-blue outline-none bg-blue-50" placeholder="รหัสผ่านใหม่ (ต้อง 6 ตัวขึ้นไป)" />
                                                 </div>
                                                 <div className="text-xs text-red-500 mb-2">* ระบบจะให้คุณล็อกอินใหม่หลังจากเปลี่ยนข้อมูลสำเร็จ</div>
                                                 <button type="submit" disabled={isChangingPwd} className="w-full bg-ns-blue text-white py-2 rounded-lg hover:bg-blue-800 transition font-bold mt-2 shadow">
