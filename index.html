@@ -185,18 +185,21 @@
                     if (data.status === 'success') {
                         return data;
                     } else {
-                        // 👇 [แก้ไข] ดักจับคำว่า "กรุณาสแกนใหม่" เพื่อให้ระบบแอบวนลูปลองใหม่เงียบๆ
+                        // 👇 [แก้ไข] กระจายคิวด้วย Jitter เพื่อป้องกันการกระจุกตัวของการดึงข้อมูล
                         if (data.message && (data.message.includes('กำลังประมวลผล') || data.message.includes('กรุณาสแกนใหม่')) && attempt < retries - 1) {
                             console.warn(`[GAS Locked] คิวเซิร์ฟเวอร์เต็ม กำลังลองใหม่รอบที่ ${attempt + 1}...`);
-                            await new Promise(resolve => setTimeout(resolve, 2000 * (attempt + 1))); 
+                            const jitter = Math.floor(Math.random() * 1500); 
+                            await new Promise(resolve => setTimeout(resolve, 1000 + (attempt * 500) + jitter)); 
                             continue;
                         }
+
                         throw new Error(data.message || 'เกิดข้อผิดพลาดจากระบบหลังบ้าน');
                     }
                 } catch (error) {
                     if (attempt < retries - 1 && (error.message.includes('Failed to fetch') || error.message.includes('กำลังประมวลผล'))) {
                         console.warn(`[Fetch Error] เชื่อมต่อไม่ได้ กำลังลองใหม่รอบที่ ${attempt + 1}...`);
-                        await new Promise(resolve => setTimeout(resolve, 2000 * (attempt + 1)));
+                        const jitter = Math.floor(Math.random() * 1500);
+                        await new Promise(resolve => setTimeout(resolve, 1000 + (attempt * 500) + jitter));
                         continue;
                     }
                     console.error("GAS Request Error:", error);
@@ -228,10 +231,11 @@
                     if (!response.ok) throw new Error('Network response was not ok');
                     const rawData = await response.json();
                     
-                    // 👇 [แก้ไข] ดักจับคำว่า "กรุณาสแกนใหม่" 
+                    // 👇 [แก้ไข] ป้องกันเซิร์ฟเวอร์ค้างด้วย Jitter แรนด้อมเวลา
                     if (rawData.status === 'error' && rawData.message && (rawData.message.includes('กำลังประมวลผล') || rawData.message.includes('กรุณาสแกนใหม่')) && attempt < retries - 1) {
                         console.warn(`[FastAPI Locked] คิวเซิร์ฟเวอร์เต็ม กำลังลองใหม่รอบที่ ${attempt + 1}...`);
-                        await new Promise(resolve => setTimeout(resolve, 2000 * (attempt + 1)));
+                        const jitter = Math.floor(Math.random() * 1500);
+                        await new Promise(resolve => setTimeout(resolve, 1000 + (attempt * 500) + jitter));
                         continue;
                     }
                     
@@ -266,7 +270,8 @@
                 } catch (error) {
                     if (attempt < retries - 1) {
                          console.warn(`[FastAPI Fetch Error] เชื่อมต่อไม่ได้ กำลังลองใหม่รอบที่ ${attempt + 1}...`);
-                         await new Promise(resolve => setTimeout(resolve, 2000 * (attempt + 1)));
+                         const jitter = Math.floor(Math.random() * 1500);
+                         await new Promise(resolve => setTimeout(resolve, 1000 + (attempt * 500) + jitter));
                          continue;
                     }
                     console.error("Fast API Request Error:", error);
@@ -450,24 +455,27 @@
             }
         };
 
-        // 🚀 [เพิ่มใหม่] ฟังก์ชันดึงประวัติการเช็คชื่อจาก Firebase โดยตรงเพื่อความเร็วสูงสุด
+       // 🚀 [แก้ไข] อัปเกรดฟังก์ชันดึงประวัติเช็คชื่อ ใส่ระบบ Cache ป้องกันโควต้ารั่วไหลจากการเปลี่ยนหน้าไปมา
         const fetchAttendanceHistoryFromFirebase = async (payload) => {
             try {
                 if (!window.db) return { status: 'error', message: 'Firebase ไม่พร้อมใช้งาน' };
                 
                 const { date, room, subjectCode } = payload; 
+                const cacheKey = `fb_att_cache_${date}_${room}_${subjectCode}`;
+                const timeKey = `fb_att_time_${date}_${room}_${subjectCode}`;
+                
+                // 💡 เช็ค Cache 5 นาทีก่อนยิง Firebase 
+                const cachedStr = localStorage.getItem(cacheKey);
+                const cachedTime = localStorage.getItem(timeKey);
+                if (cachedStr && cachedTime && (Date.now() - parseInt(cachedTime)) < 5 * 60 * 1000) { 
+                    try { return { status: 'success', data: JSON.parse(cachedStr), isCached: true }; } catch(e) {}
+                }
+
                 let query = window.db.collection('attendance_records');
                 
-                // ถ้าระบุวันที่เจาะจง ให้ค้นหาตามวัน (ถ้าเป็น 'ALL' จะดึงทั้งหมด)
-                if (date && date !== 'ALL') {
-                    query = query.where('date', '==', date);
-                }
-                if (room && room !== 'ALL') {
-                    query = query.where('room', '==', room);
-                }
-                if (subjectCode && subjectCode !== 'ALL') {
-                    query = query.where('subjectCode', '==', subjectCode);
-                }
+                if (date && date !== 'ALL') query = query.where('date', '==', date);
+                if (room && room !== 'ALL') query = query.where('room', '==', room);
+                if (subjectCode && subjectCode !== 'ALL') query = query.where('subjectCode', '==', subjectCode);
 
                 const snapshot = await query.get();
                 let recordsArray = [];
@@ -475,7 +483,6 @@
                 snapshot.forEach(doc => {
                     const data = doc.data();
                     if (data.records && typeof data.records === 'object') {
-                        // แปลงข้อมูลแบบ Map จาก Firebase กลับเป็น Array เพื่อให้ React นำไปแสดงในตารางหน้าเว็บได้
                         Object.keys(data.records).forEach(studentId => {
                             recordsArray.push({
                                 studentId: studentId,
@@ -490,6 +497,7 @@
                     }
                 });
 
+                try { localStorage.setItem(cacheKey, JSON.stringify(recordsArray)); localStorage.setItem(timeKey, Date.now().toString()); } catch(e) {}
                 return { status: 'success', data: recordsArray, isCached: false };
             } catch (error) {
                 console.error("Error fetching attendance from Firebase:", error);
@@ -497,11 +505,41 @@
             }
         };
 
-        // 🚀 [เพิ่มใหม่] ฟังก์ชันดึงประวัติการลาจาก Firebase Collection "leave_requests"
-        const fetchLeaveRequestsFromFirebase = async () => {
+        // 🚀 [เพิ่มใหม่] ฟังก์ชันดึงประวัติชุมนุมลง Cache ป้องกันหน้าเช็คชื่อดึงข้อมูลรัวๆ
+        const fetchClubRecordsFromFirebase = async (forceRefresh = false) => {
             try {
+                const cacheKey = 'fb_club_rec_cache_v1';
+                const timeKey = 'fb_club_rec_time_v1';
+                if (forceRefresh !== true) {
+                    const cachedStr = localStorage.getItem(cacheKey);
+                    const cachedTime = localStorage.getItem(timeKey);
+                    if (cachedStr && cachedTime && (Date.now() - parseInt(cachedTime)) < 60 * 60 * 1000) { 
+                        try { return { status: 'success', data: JSON.parse(cachedStr) }; } catch(e) {}
+                    }
+                }
                 if (!window.db) return { status: 'error', message: 'Firebase ไม่พร้อมใช้งาน' };
-                // 💡 [แก้ไข] ดึงข้อมูลที่ถูกจัดกลุ่มตามวันที่ และกระจายกลับเป็น Array อย่างแม่นยำ
+                const snapshot = await window.db.collection('club_records').get();
+                let recordsArray = [];
+                snapshot.forEach(doc => { recordsArray.push({ id: doc.id, ...doc.data() }); });
+                try { localStorage.setItem(cacheKey, JSON.stringify(recordsArray)); localStorage.setItem(timeKey, Date.now().toString()); } catch(e) {}
+                return { status: 'success', data: recordsArray };
+            } catch (error) { return { status: 'error', message: error.message }; }
+        };
+
+        // 🚀 [แก้ไข] เพิ่มระบบ Cache ให้ฟังก์ชันดึงประวัติการลา ป้องกันโควต้าเต็ม
+        const fetchLeaveRequestsFromFirebase = async (forceRefresh = false) => {
+            try {
+                const cacheKey = 'fb_leave_cache_v1';
+                const timeKey = 'fb_leave_time_v1';
+                if (forceRefresh !== true) {
+                    const cachedStr = localStorage.getItem(cacheKey);
+                    const cachedTime = localStorage.getItem(timeKey);
+                    if (cachedStr && cachedTime && (Date.now() - parseInt(cachedTime)) < 15 * 60 * 1000) { // แคช 15 นาที
+                        try { return { status: 'success', data: JSON.parse(cachedStr) }; } catch(e) {}
+                    }
+                }
+
+                if (!window.db) return { status: 'error', message: 'Firebase ไม่พร้อมใช้งาน' };
                 const snapshot = await window.db.collection('leave_requests').get();
                 let recordsArray = [];
                 snapshot.forEach(doc => {
@@ -519,12 +557,12 @@
                                 recorder: String(r['ผู้บันทึก'] || r.recorder || '')
                             });
                         });
-                    } else if (data.id) { // เผื่อรองรับข้อมูลเก่าที่ไม่ได้จัดกลุ่ม
+                    } else if (data.id) { 
                         recordsArray.push({ id: String(doc.id), ...data });
                     }
                 });
-                // เรียงลำดับจากล่าสุดไปเก่าสุด
                 recordsArray.sort((a, b) => Number(b.id) - Number(a.id));
+                try { localStorage.setItem(cacheKey, JSON.stringify(recordsArray)); localStorage.setItem(timeKey, Date.now().toString()); } catch(e) {}
                 return { status: 'success', data: recordsArray };
             } catch (error) {
                 console.error("Error fetching leave requests from Firebase:", error);
@@ -532,9 +570,19 @@
             }
         };
 
-        // 🚀 [เพิ่มใหม่] ฟังก์ชันดึงประวัติพฤติกรรมจาก Firebase Collection "behavior_records" (จัดกลุ่มตามวันที่)
-        const fetchBehaviorRecordsFromFirebase = async () => {
+        // 🚀 [แก้ไข] เพิ่มระบบ Cache ให้ฟังก์ชันดึงประวัติพฤติกรรม ป้องกันโควต้าเต็ม
+        const fetchBehaviorRecordsFromFirebase = async (forceRefresh = false) => {
             try {
+                const cacheKey = 'fb_behav_cache_v1';
+                const timeKey = 'fb_behav_time_v1';
+                if (forceRefresh !== true) {
+                    const cachedStr = localStorage.getItem(cacheKey);
+                    const cachedTime = localStorage.getItem(timeKey);
+                    if (cachedStr && cachedTime && (Date.now() - parseInt(cachedTime)) < 15 * 60 * 1000) { 
+                        try { return { status: 'success', data: JSON.parse(cachedStr) }; } catch(e) {}
+                    }
+                }
+
                 if (!window.db) return { status: 'error', message: 'Firebase ไม่พร้อมใช้งาน' };
                 const snapshot = await window.db.collection('behavior_records').get();
                 let recordsArray = [];
@@ -554,12 +602,12 @@
                                 type: String(r['ประเภทคะแนน'] || r.type || '')
                             });
                         });
-                    } else if (data.id) { // เผื่อรองรับข้อมูลเก่าที่ไม่ได้จัดกลุ่ม
+                    } else if (data.id) { 
                         recordsArray.push({ id: String(doc.id), ...data });
                     }
                 });
-                // เรียงลำดับจากล่าสุดไปเก่าสุด
                 recordsArray.sort((a, b) => Number(b.id) - Number(a.id));
+                try { localStorage.setItem(cacheKey, JSON.stringify(recordsArray)); localStorage.setItem(timeKey, Date.now().toString()); } catch(e) {}
                 return { status: 'success', data: recordsArray };
             } catch (error) {
                 console.error("Error fetching behavior records from Firebase:", error);
@@ -567,20 +615,26 @@
             }
         };
 
-        // 🚀 [แก้ไข] ฟังก์ชันดึงประวัติการลงทะเบียนวิชาจาก Firebase ให้รองรับคีย์ทั้งภาษาไทยและอังกฤษจากฐานข้อมูลจริง
-        const fetchRegistrationsFromFirebase = async () => {
+        // 🚀 [แก้ไข] เพิ่มระบบ Cache ให้ฟังก์ชันดึงการลงทะเบียนวิชา 
+        const fetchRegistrationsFromFirebase = async (forceRefresh = false) => {
             try {
+                const cacheKey = 'fb_reg_cache_v1';
+                const timeKey = 'fb_reg_time_v1';
+                if (forceRefresh !== true) {
+                    const cachedStr = localStorage.getItem(cacheKey);
+                    const cachedTime = localStorage.getItem(timeKey);
+                    if (cachedStr && cachedTime && (Date.now() - parseInt(cachedTime)) < 60 * 60 * 1000) { // แคช 1 ชั่วโมง
+                        try { return { status: 'success', data: JSON.parse(cachedStr) }; } catch(e) {}
+                    }
+                }
+
                 if (!window.db) return { status: 'error', message: 'Firebase ไม่พร้อมใช้งาน' };
                 const snapshot = await window.db.collection('subject_registrations').get();
                 let recordsArray = [];
                 
                 snapshot.forEach(doc => {
                     const data = doc.data();
-                    
-                    // ป้องกันบัคเอกสารว่างเปล่า
                     if (!data) return;
-                    
-                    // 💡 รองรับคีย์นักเรียนทั้งแบบภาษาอังกฤษ (students) และภาษาไทย (นักเรียน)
                     let stus = data.students || data['นักเรียน'] || [];
                     if (typeof stus === 'string') {
                         try { stus = JSON.parse(stus); } catch(e) { stus = []; }
@@ -589,21 +643,18 @@
                     if (stus && Array.isArray(stus)) {
                         stus.forEach((stu, idx) => {
                             recordsArray.push({
-                                id: `${doc.id}_${idx}`,
-                                docId: doc.id, // 💡 เพิ่มการเก็บ docId ตัวจริงจาก Firebase เพื่อใช้อ้างอิงตอนแก้ไข/ลบ
-                                // 💡 ดึงค่าโดยเช็คคีย์ทั้งภาษาอังกฤษและภาษาไทย
+                                id: `${doc.id}_${idx}`, docId: doc.id, 
                                 subjectCode: String(data.subjectCode || data['รหัสวิชา'] || ''),
                                 subjectName: String(data.subjectName || data['ชื่อวิชา'] || ''),
                                 room: String(data.room || data['ชั้น/ห้อง'] || ''),
                                 teacherName: String(data.teacherName || data['ครูประจำวิชา'] || ''),
-                                // 💡 รองรับคีย์รหัสนักเรียนทุกรูปแบบ
                                 studentId: String(stu.studentId || stu.code || stu['เลขประจำตัวนักเรียน'] || ''),
                                 studentName: String(stu.studentName || stu.name || stu['ชื่อ-สกุล'] || '')
                             });
                         });
                     }
                 });
-                
+                try { localStorage.setItem(cacheKey, JSON.stringify(recordsArray)); localStorage.setItem(timeKey, Date.now().toString()); } catch(e) {}
                 return { status: 'success', data: recordsArray };
             } catch (error) {
                 console.error("Error fetching registrations from Firebase:", error);
@@ -611,9 +662,19 @@
             }
         };
 
-        // 🚀 [เพิ่มใหม่] ฟังก์ชันดึงประวัติการเข้า-ออก จาก Firebase Collection "room_records"
-        const fetchTimeRecordsFromFirebase = async () => {
+        // 🚀 [แก้ไข] เพิ่มระบบ Cache ให้ฟังก์ชันดึงประวัติการเข้า-ออก
+        const fetchTimeRecordsFromFirebase = async (forceRefresh = false) => {
             try {
+                const cacheKey = 'fb_time_cache_v1';
+                const timeKey = 'fb_time_time_v1';
+                if (forceRefresh !== true) {
+                    const cachedStr = localStorage.getItem(cacheKey);
+                    const cachedTime = localStorage.getItem(timeKey);
+                    if (cachedStr && cachedTime && (Date.now() - parseInt(cachedTime)) < 10 * 60 * 1000) { // แคช 10 นาที
+                        try { return { status: 'success', data: JSON.parse(cachedStr) }; } catch(e) {}
+                    }
+                }
+
                 if (!window.db) return { status: 'error', message: 'Firebase ไม่พร้อมใช้งาน' };
                 const snapshot = await window.db.collection('room_records').get();
                 let recordsArray = [];
@@ -621,7 +682,6 @@
                 snapshot.forEach(doc => {
                     const data = doc.data();
                     Object.keys(data).forEach(key => {
-                        // ดึงเฉพาะคีย์ที่เป็นตัวเลข (ดัชนีของ Map)
                         if (!isNaN(key)) {
                             const r = data[key];
                             recordsArray.push({
@@ -633,15 +693,15 @@
                                 time: String(r['เวลาบันทึก'] || r.time || ''),
                                 statusStr: String(r['สถานะ'] || r.statusStr || ''),
                                 type: String(r['ประเภท(เข้า/ออก)'] || r.type || ''),
-                                docId: doc.id,       // เก็บชื่อไฟล์ Chunk ไว้
-                                chunkIndex: key      // เก็บ Index (1, 2, 3...) ไว้
+                                docId: doc.id,       
+                                chunkIndex: key      
                             });
                         }
                     });
                 });
 
-                // เรียงลำดับจากล่าสุดไปเก่าสุด
                 recordsArray.sort((a, b) => Number(b.id) - Number(a.id));
+                try { localStorage.setItem(cacheKey, JSON.stringify(recordsArray)); localStorage.setItem(timeKey, Date.now().toString()); } catch(e) {}
                 return { status: 'success', data: recordsArray };
             } catch (error) {
                 console.error("Error fetching time records from Firebase:", error);
@@ -649,9 +709,19 @@
             }
         };
 
-        // 🚀 [เพิ่มใหม่] ฟังก์ชันดึงประวัติการยกเว้นมาสาย จาก Firebase Collection "exemptions"
-        const fetchExemptionsFromFirebase = async () => {
+        // 🚀 [แก้ไข] เพิ่มระบบ Cache ให้ฟังก์ชันดึงประวัติยกเว้นมาสาย
+        const fetchExemptionsFromFirebase = async (forceRefresh = false) => {
             try {
+                const cacheKey = 'fb_exempt_cache_v1';
+                const timeKey = 'fb_exempt_time_v1';
+                if (forceRefresh !== true) {
+                    const cachedStr = localStorage.getItem(cacheKey);
+                    const cachedTime = localStorage.getItem(timeKey);
+                    if (cachedStr && cachedTime && (Date.now() - parseInt(cachedTime)) < 60 * 60 * 1000) { 
+                        try { return { status: 'success', data: JSON.parse(cachedStr) }; } catch(e) {}
+                    }
+                }
+
                 if (!window.db) return { status: 'error', message: 'Firebase ไม่พร้อมใช้งาน' };
                 const snapshot = await window.db.collection('exemptions').get();
                 let recordsArray = [];
@@ -659,6 +729,7 @@
                     recordsArray.push({ id: String(doc.id), ...doc.data() });
                 });
                 recordsArray.sort((a, b) => Number(b.id) - Number(a.id));
+                try { localStorage.setItem(cacheKey, JSON.stringify(recordsArray)); localStorage.setItem(timeKey, Date.now().toString()); } catch(e) {}
                 return { status: 'success', data: recordsArray };
             } catch (error) {
                 console.error("Error fetching exemptions from Firebase:", error);
@@ -9980,23 +10051,18 @@
                         // 🚀 [Auto-Correction เบื้องหลัง] แอบดึงข้อมูลล่าสุด เพื่อป้องกันครูเช็คขาดทับใบลาที่เพิ่งแจ้งเข้ามา (ไม่บล็อคหน้าจอ)
                         (async () => {
                             try {
-                                // 💡 [แก้ไข] ถอดคำสั่ง fetchFastAPI('getInitialData') ออกถาวร เพราะเป็นสาเหตุหลักที่ทำให้หน่วง 2-3 วินาที
-                                const [attRes, fbLeaveRes] = await Promise.allSettled([
+                                // 💡 [แก้ไขสาเหตุหลักเรื่องโควต้า] นำ fetchLeaveRequestsFromFirebase() ออก เพราะดึงข้อมูลมาเปลืองโควต้า 
+                                // ระบบจะใช้ leaveRecords จาก Global State ที่ถูกโหลดมาแล้ว 1 ครั้งแทน
+                                const [attRes] = await Promise.allSettled([
                                     // 💡 ดึงประวัติการเช็คชื่อจาก Firebase
                                     !attendanceCache[cacheKey] ? fetchAttendanceHistoryFromFirebase({
                                         date: targetDateTH,
                                         room: matchedSchedule.room,
                                         subjectCode: matchedSchedule.subjectCode
-                                    }) : Promise.resolve({ status: 'success', data: attendanceCache[cacheKey], isCached: true }),
-                                    fetchLeaveRequestsFromFirebase() // 🚀 ดึงข้อมูลการลาล่าสุดจาก Firebase
+                                    }) : Promise.resolve({ status: 'success', data: attendanceCache[cacheKey], isCached: true })
                                 ]);
 
-                                let liveLeaveRecords = leaveRecords;
-                                // 💡 [แก้ไข] อัปเดตข้อมูลใบลา โดยใช้ Firebase 100% (ตัดการดึงข้อมูลจาก GAS ออกถาวร ป้องกันข้อมูลเก่าทับ)
-                                if (fbLeaveRes.status === 'fulfilled' && fbLeaveRes.value && fbLeaveRes.value.status === 'success') {
-                                    liveLeaveRecords = fbLeaveRes.value.data;
-                                    if (setLeaveRecords) setLeaveRecords(liveLeaveRecords);
-                                }
+                                let liveLeaveRecords = leaveRecords; // 💡 ใช้ Global State โดยตรง ไม่โหลดใหม่ให้เปลืองโควต้า
 
                                 let fetchedAttData = [];
                                 if (attRes.status === 'fulfilled' && attRes.value && attRes.value.status === 'success') {
@@ -10686,11 +10752,13 @@
                         const sSubCheckRaw = String(parsed.subjectName || '');
                         const rawPStr = String(parsed.period || '').trim();
                         
-                        // 💡 [แก้ไข] กรองข้อมูล: ข้ามตารางที่ตรงกับคำว่า "ประชุม", "การเรียนรู้อิสระ", "โครงงานคุณธรรม" 
+                        // 💡 [แก้ไข] กรองข้อมูล: ข้ามตารางที่ตรงกับคำว่า "ประชุม", "การเรียนรู้อิสระ", "หน้าที่พลเมือง", "โครงงานคุณธรรม" 
                         // และข้าม "โฮมรูม" หากเป็นคาบ 8 หรือคาบอื่นๆ ที่ไม่ใช่คาบ 0 เพื่อไม่นำมาออกรายงาน
                         if (
                             sSubCheckRaw.includes('ประชุม') || 
                             sSubCheckRaw.includes('การเรียนรู้อิสระ') || 
+                            sSubCheckRaw.includes('หน้าที่พลเมือง') ||
+                            sSubCheckRaw.includes('หน้าที่ผลเมือง') ||
                             sSubCheckRaw.includes('โครงงานคุณธรรม') ||
                             (sSubCheckRaw.includes('โฮมรูม') && rawPStr.includes('8'))
                         ) {
@@ -13930,18 +13998,30 @@
                 try {
                     const roomParam = (classFilter && roomFilter) ? `${classFilter}/${roomFilter}` : 'ALL';
                     
-                    // เรียกข้อมูล 2 ส่วนพร้อมกัน: สรุป ม.ส. และ บันทึกการเช็คชื่อรายวิชา (สำหรับกราฟ)
+                  // 💡 [แก้ปัญหาโควต้าเต็ม 50,000 ครั้ง] ป้องกันการดึงประวัติเช็คชื่อดิบทั้งโรงเรียนพร้อมกัน
+                    let fetchAttPromise = Promise.resolve({ status: 'success', data: [] });
+                    
+                    // ระบบจะยอมให้โหลดข้อมูลดิบ ก็ต่อเมื่อครูเลือกชั้น/ห้องเจาะจงแล้วเท่านั้น (ดึงแค่ข้อมูลระดับห้อง ไม่ใช่ทั้งโรงเรียน)
+                    if (activeTab === 'class_att_status' || activeTab === 'absent_stats') {
+                        if (!classFilter || !roomFilter) {
+                            alert("เพื่อป้องกันฐานข้อมูลทำงานหนักเกินไป กรุณาเลือก 'ชั้นเรียน' และ 'ห้อง' ให้ครบถ้วนก่อนกดดึงข้อมูลครับ");
+                            setIsFetchingMsRisk(false);
+                            return;
+                        }
+                        fetchAttPromise = fetchAttendanceHistoryFromFirebase({
+                            date: 'ALL',
+                            room: roomParam, // ล็อคเป้าให้ดึงเฉพาะห้องที่เลือกเท่านั้น!
+                            subjectCode: 'ALL'
+                        });
+                    }
+
+                    // เรียกข้อมูล 2 ส่วนพร้อมกัน: สรุป ม.ส. (จาก GAS) และ ประวัติเช็คชื่อ (จาก Firebase)
                     const [resMs, resAtt] = await Promise.all([
                         callGAS('getMsRiskData', {
                             targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48',
                             room: roomParam
                         }),
-                        // 💡 [แก้ไข] ดึงข้อมูลประวัติการเช็คชื่อดิบจาก Firebase เพื่อนำมาสร้างกราฟ
-                        fetchAttendanceHistoryFromFirebase({
-                            date: 'ALL',
-                            room: roomParam,
-                            subjectCode: 'ALL'
-                        })
+                        fetchAttPromise
                     ]);
 
                     if (resAtt.status === 'success') {
@@ -18451,38 +18531,38 @@
                     fetchBehaviorRecordsFromFirebase(forceRefresh),
                     fetchRegistrationsFromFirebase(forceRefresh),
                     fetchTimeRecordsFromFirebase(forceRefresh),
-                    fetchExemptionsFromFirebase(forceRefresh)
-                ]).then(([fbLeaveRes, fbBehaviorRes, fbRegRes, fbTimeRes, fbExemptRes]) => {
+                    fetchExemptionsFromFirebase(forceRefresh),
+                    fetchClubRecordsFromFirebase(forceRefresh) // 💡 ดึงชุมนุมมารอไว้เลย
+                ]).then(([fbLeaveRes, fbBehaviorRes, fbRegRes, fbTimeRes, fbExemptRes, fbClubRes]) => {
                     if (fbLeaveRes.status === 'fulfilled' && fbLeaveRes.value && fbLeaveRes.value.status === 'success') setGlobalLeaveRecords(fbLeaveRes.value.data);
                     if (fbBehaviorRes.status === 'fulfilled' && fbBehaviorRes.value && fbBehaviorRes.value.status === 'success') setGlobalBehaviorRecords(fbBehaviorRes.value.data);
                     if (fbRegRes.status === 'fulfilled' && fbRegRes.value && fbRegRes.value.status === 'success') setGlobalRegistrations(fbRegRes.value.data);
                     if (fbTimeRes.status === 'fulfilled' && fbTimeRes.value && fbTimeRes.value.status === 'success') setGlobalTimeRecords(fbTimeRes.value.data);
                     if (fbExemptRes.status === 'fulfilled' && fbExemptRes.value && fbExemptRes.value.status === 'success') setGlobalExemptions(fbExemptRes.value.data);
+                    
+                    // 💡 ส่งข้อมูลชุมนุมเข้า Global State ตัดปัญหาหน้าเช็คชื่อต้องไปดึง Firebase เอง
+                    if (fbClubRes.status === 'fulfilled' && fbClubRes.value && fbClubRes.value.status === 'success') setGlobalClubRecords(fbClubRes.value.data);
                 }).catch(e => console.error("Firebase sync error:", e));
 
-                // 🚀 2. ดึงข้อมูลนักเรียน (ปลดล็อคความเร็ว 0 วินาที ขจัดบั๊กโหลดข้าม และลบลูปซ้ำซ้อนทิ้ง 100%)
+                // 🚀 2. ดึงข้อมูลนักเรียน (ประกาศตัวแปร pStudent เพื่อป้องกัน Error)
                 const pStudent = fetchStudentsFromDirectSheet(forceRefresh).then(result => {
-                    // 💡 รองรับทั้งรูปแบบ Array และ Object ป้องกันบั๊ก Length Undefined
                     const studentsList = Array.isArray(result) ? result : (result && result.data ? result.data : []);
-
                     if (studentsList && studentsList.length > 0) {
-                        // 💡 โยนข้อมูลที่ทำความสะอาดแล้วเข้า Global State ทันที ไม่ต้องนำไปเข้าลูป processStudents ซ้ำให้เครื่องค้าง
                         setGlobalStudents(studentsList);
                     } else {
                         console.warn("ไม่พบข้อมูลนักเรียนผ่านช่องทางลัด กำลังสลับไปดึงจาก Google Sheets (GAS)...");
-                        callGAS('getStudents').then(backupGas => {
+                        return callGAS('getStudents').then(backupGas => {
                             if (backupGas && backupGas.status === 'success' && backupGas.data && backupGas.data.length > 0) {
-                                // ดึงมาได้แล้วยัดเข้า State ทันทีเช่นกัน
                                 setGlobalStudents(backupGas.data);
                             } else {
                                 setGlobalStudents([]);
                             }
-                        }).catch(e => {
-                            console.error("GAS Fallback error:", e);
-                            setGlobalStudents([]);
                         });
                     }
-                }).catch(e => console.error("Student Data error:", e));
+                }).catch(e => {
+                    console.error("Student Data error:", e);
+                    setGlobalStudents([]);
+                });
 
                 // 🚀 3. ดึงข้อมูลจาก Google Sheets (ตั้งค่า, ครู, ผู้ใช้, ตารางสอน) พร้อมระบบ Cache
                 const fetchGasDataWithCache = async () => {
@@ -18597,29 +18677,45 @@
                     }
 
                     try {
-                        // 💡 [กู้คืน 4 หัวใจสำคัญ!] เพิ่มคำสั่งยิงไปดึง "ตารางสอน" และ "รายชื่อนักเรียนชุมนุม" กลับมา
-                        const [initialRes, bulkDataRes, scheduleRes, clubRes] = await Promise.allSettled([
+                        // 💡 [แก้ไขคอขวดขั้นสุดยอด] ยกเลิกการรอคิวทีละขั้นตอนซึ่งทำให้เสียเวลานาน
+                        // เปลี่ยนไปดึงข้อมูลตารางสอนและชุมนุมผ่านช่องทางด่วน (GVIZ CSV) ที่ไม่มีข้อจำกัดโควต้าและไม่ชนกับ GAS
+                        // และดึงข้อมูลการตั้งค่า (Initial) และผู้ใช้ (Bulk) แบบขนานกัน (Parallel) 
+                        // ช่วยลดการเรียก Google Scripts จาก 4 ครั้ง เหลือเพียง 2 ครั้ง และลดเวลารอจากหลักนาทีเหลือ 1-2 วินาที!
+                        const freshData = { initial: null, bulk: null, schedule: null, club: null };
+
+                        const [initialRes, bulkDataRes, schedResCsv, clubResCsv] = await Promise.allSettled([
                             fetchFastAPI('getInitialData'),
                             fetchFastAPI('getAppStartupData'),
-                            fetchFastAPI('getData', { sheetName: 'กำหนดตารางสอน', targetSheetId: '1pgvYO_Qh9m-3HkLV3kbyOyK-ztdO1Vb2yNTxk3X6RV0' }),
-                            fetchFastAPI('getData', { sheetName: 'ชุมนุม', targetSheetId: '1NBnP7z4VWTvGCwxdgaYse-MI2x6o0Jv4aL8pTt2Ja-A' })
+                            fetch(`https://docs.google.com/spreadsheets/d/1pgvYO_Qh9m-3HkLV3kbyOyK-ztdO1Vb2yNTxk3X6RV0/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent('กำหนดตารางสอน')}&t=${Date.now()}`),
+                            fetch(`https://docs.google.com/spreadsheets/d/1NBnP7z4VWTvGCwxdgaYse-MI2x6o0Jv4aL8pTt2Ja-A/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent('ชุมนุม')}&t=${Date.now()}`)
                         ]);
-
-                        const freshData = { initial: null, bulk: null, schedule: null, club: null };
 
                         if (initialRes.status === 'fulfilled' && initialRes.value && initialRes.value.status === 'success') {
                             freshData.initial = initialRes.value.data;
                         }
+
                         if (bulkDataRes.status === 'fulfilled' && bulkDataRes.value && bulkDataRes.value.status === 'success') {
                             freshData.bulk = bulkDataRes.value.data;
                         }
-                        // 💡 นำตารางสอนใส่ตัวแปร
-                        if (scheduleRes.status === 'fulfilled' && scheduleRes.value && scheduleRes.value.status === 'success') {
-                            freshData.schedule = scheduleRes.value.data;
+
+                        // ประมวลผลตารางสอนผ่าน CSV ด่วน
+                        if (schedResCsv.status === 'fulfilled' && schedResCsv.value.ok) {
+                            const text = await schedResCsv.value.text();
+                            freshData.schedule = parseCSV(text);
+                        } else {
+                            // ระบบสำรอง หากเซิร์ฟเวอร์โดนแบน
+                            const res = await fetchFastAPI('getData', { sheetName: 'กำหนดตารางสอน', targetSheetId: '1pgvYO_Qh9m-3HkLV3kbyOyK-ztdO1Vb2yNTxk3X6RV0' }, 2);
+                            if (res && res.status === 'success') freshData.schedule = res.data;
                         }
-                        // 💡 นำรายชื่อชุมนุมใส่ตัวแปร
-                        if (clubRes.status === 'fulfilled' && clubRes.value && clubRes.value.status === 'success') {
-                            freshData.club = clubRes.value.data;
+
+                        // ประมวลผลรายชื่อชุมนุมผ่าน CSV ด่วน
+                        if (clubResCsv.status === 'fulfilled' && clubResCsv.value.ok) {
+                            const text = await clubResCsv.value.text();
+                            freshData.club = parseCSV(text);
+                        } else {
+                            // ระบบสำรอง
+                            const res = await fetchFastAPI('getData', { sheetName: 'ชุมนุม', targetSheetId: '1NBnP7z4VWTvGCwxdgaYse-MI2x6o0Jv4aL8pTt2Ja-A' }, 2);
+                            if (res && res.status === 'success') freshData.club = res.data;
                         }
 
                         applyGasData(freshData.initial, freshData.bulk, freshData.schedule, freshData.club);
@@ -18631,7 +18727,7 @@
                         
                         console.log("[GAS Data Loaded]: ดึงข้อมูลจาก Sheets ใหม่สำเร็จ");
                     } catch (e) {
-                        console.error("GAS Bulk Fetch Error:", e);
+                        console.error("GAS Fetch Error:", e);
                     }
                 };
 
