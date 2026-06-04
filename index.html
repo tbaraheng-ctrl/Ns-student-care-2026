@@ -10684,15 +10684,23 @@
                         const parsed = parseScheduleRow(row);
                         
                         const sSubCheckRaw = String(parsed.subjectName || '');
+                        const rawPStr = String(parsed.period || '').trim();
                         
-                        // 💡 กรองข้อมูล: ข้ามตารางที่มีคำว่า "ประชุม" (เช่น ประชุมฝ่ายบริหารวิชาการ, ประชุมฝ่ายบุคคล) ไม่ต้องนำมาออกรายงาน
-                        if (sSubCheckRaw.includes('ประชุม')) return;
+                        // 💡 [แก้ไข] กรองข้อมูล: ข้ามตารางที่ตรงกับคำว่า "ประชุม", "การเรียนรู้อิสระ", "โครงงานคุณธรรม" 
+                        // และข้าม "โฮมรูม" หากเป็นคาบ 8 หรือคาบอื่นๆ ที่ไม่ใช่คาบ 0 เพื่อไม่นำมาออกรายงาน
+                        if (
+                            sSubCheckRaw.includes('ประชุม') || 
+                            sSubCheckRaw.includes('การเรียนรู้อิสระ') || 
+                            sSubCheckRaw.includes('โครงงานคุณธรรม') ||
+                            (sSubCheckRaw.includes('โฮมรูม') && rawPStr.includes('8'))
+                        ) {
+                            return; 
+                        }
 
                         const sSubCheck = sSubCheckRaw.replace(/[^ก-๙a-zA-Z0-9]/g, '').toUpperCase();
                         
                         // 💡 เพิ่มการตรวจสอบคาบเรียนแบบ Range (เช่น "1-2") เพื่อค้นหาการเช็คชื่อคาบย่อยให้เจอ
                         let sPerCheckList = [];
-                        let rawPStr = String(parsed.period || '').trim();
                         if (rawPStr.includes('-')) {
                             let parts = rawPStr.split('-');
                             let pStart = parseInt(parts[0].replace(/[^0-9]/g, ''));
@@ -10707,7 +10715,8 @@
                         }
                         if (sPerCheckList.length === 0) sPerCheckList.push(rawPStr);
                         
-                        const isHomeroom = sSubCheck.includes('โฮมรูม') || sSubCheck.includes('หน้าเสาธง') || sPerCheckList.includes('0');
+                        // 💡 [แก้ไข] ล็อคเป้าให้เป็น Homeroom (หน้าเสาธง/โฮมรูม) เฉพาะคาบ 0 เท่านั้น
+                        const isHomeroom = sPerCheckList.includes('0') || sSubCheckRaw.includes('หน้าเสาธง') || (sSubCheckRaw.includes('โฮมรูม') && sPerCheckList.includes('0'));
                         
                         if (reportDataType === 'homeroom' && !isHomeroom) return;
                         if (reportDataType === 'subject' && isHomeroom) return;
@@ -19093,9 +19102,21 @@
                                             <React.Fragment>
                                                 <button onClick={() => syncGlobalData(true)} className="text-sm bg-blue-50 text-ns-blue hover:bg-blue-100 px-4 py-2 rounded-lg font-bold transition shadow-sm border border-blue-200"><i className="fa-solid fa-rotate-right mr-1"></i>อัปเดตข้อมูล</button>
                                                 <button onClick={() => { 
+                                                    // 💡 1. ล้างข้อมูล Cache ใน LocalStorage ทุกรายการอย่างเด็ดขาด (เก็บไว้เฉพาะค่าตั้งค่าและรหัสผ่าน)
+                                                    const keepKeys = ['ns_username', 'ns_password', 'ns_school_config', 'ns_role_perms', 'ns_time_settings', 'ns_behaviors', 'ns_period_settings', 'ns_line_notify'];
                                                     Object.keys(localStorage).forEach(key => {
-                                                        if (key.includes('cache') || key.includes('time_v')) localStorage.removeItem(key);
+                                                        if (!keepKeys.includes(key)) localStorage.removeItem(key);
                                                     });
+                                                    
+                                                    // 💡 2. ล้างข้อมูลหน้าจอ (State) ทั้งหมดให้เป็นค่าว่าง เพื่อบังคับให้วาดหน้าจอใหม่และไม่ให้จำข้อมูลเก่า
+                                                    setGlobalStudents([]); setGlobalTimeRecords([]); setGlobalBehaviorRecords([]); 
+                                                    setGlobalActivityRecords([]); setGlobalForgotCardRecords([]); setGlobalLeaveRecords([]); 
+                                                    setGlobalRegistrations([]); setGlobalExemptions([]); setGlobalLeaveSchoolRecords([]); 
+                                                    setGlobalMsMakeupRecords([]); setGlobalSchedules([]); 
+                                                    if (typeof setGlobalClubRecords === 'function') setGlobalClubRecords([]);
+                                                    if (typeof setGlobalClubStudents === 'function') setGlobalClubStudents([]);
+
+                                                    // 💡 3. สั่งดึงข้อมูลใหม่ทั้งหมด
                                                     syncGlobalData(true); 
                                                 }} className="text-sm bg-red-50 text-red-600 hover:bg-red-100 px-4 py-2 rounded-lg font-bold transition shadow-sm border border-red-200" title="กดเมื่อข้อมูลในระบบไม่ตรงกัน"><i className="fa-solid fa-broom mr-1"></i>ล้างแคช</button>
                                             </React.Fragment>
