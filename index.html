@@ -10765,23 +10765,8 @@
                         
                         const sSubCheckRaw = String(parsed.subjectName || '');
                         const rawPStr = String(parsed.period || '').trim();
-                        
-                        // 💡 [แก้ไข] กรองข้อมูล: ข้ามตารางที่ตรงกับคำว่า "ประชุม", "การเรียนรู้อิสระ", "หน้าที่พลเมือง", "โครงงานคุณธรรม" 
-                        // และข้าม "โฮมรูม" หากเป็นคาบ 8 หรือคาบอื่นๆ ที่ไม่ใช่คาบ 0 เพื่อไม่นำมาออกรายงาน
-                        if (
-                            sSubCheckRaw.includes('ประชุม') || 
-                            sSubCheckRaw.includes('การเรียนรู้อิสระ') || 
-                            sSubCheckRaw.includes('หน้าที่พลเมือง') ||
-                            sSubCheckRaw.includes('หน้าที่ผลเมือง') ||
-                            sSubCheckRaw.includes('โครงงานคุณธรรม') ||
-                            (sSubCheckRaw.includes('โฮมรูม') && rawPStr.includes('8'))
-                        ) {
-                            return; 
-                        }
 
-                        const sSubCheck = sSubCheckRaw.replace(/[^ก-๙a-zA-Z0-9]/g, '').toUpperCase();
-                        
-                        // 💡 เพิ่มการตรวจสอบคาบเรียนแบบ Range (เช่น "1-2") เพื่อค้นหาการเช็คชื่อคาบย่อยให้เจอ
+                        // 💡 หา List คาบมาไว้ก่อนเพื่อใช้ตรวจสอบเงื่อนไขโฮมรูมได้อย่างแม่นยำ
                         let sPerCheckList = [];
                         if (rawPStr.includes('-')) {
                             let parts = rawPStr.split('-');
@@ -10797,7 +10782,23 @@
                         }
                         if (sPerCheckList.length === 0) sPerCheckList.push(rawPStr);
                         
-                        // 💡 [แก้ไข] ล็อคเป้าให้เป็น Homeroom (หน้าเสาธง/โฮมรูม) เฉพาะคาบ 0 เท่านั้น
+                        // 💡 [แก้ไข] กรองข้อมูล: ข้ามตารางวิชาที่ไม่ต้องการรายงาน (การเรียนรู้อิสระ, ประชุม, หน้าที่พลเมือง, กิจกรรม, จริยธรรม และ โฮมรูมคาบอื่น)
+                        if (
+                            sSubCheckRaw.includes('ประชุม') || 
+                            sSubCheckRaw.includes('การเรียนรู้อิสระ') || 
+                            sSubCheckRaw.includes('หน้าที่พลเมือง') ||
+                            sSubCheckRaw.includes('หน้าที่ผลเมือง') ||
+                            sSubCheckRaw.includes('โครงงานคุณธรรม') ||
+                            sSubCheckRaw.includes('จริยธรรม') ||
+                            (sSubCheckRaw.includes('กิจกรรม') && !sSubCheckRaw.includes('หน้าเสาธง') && !sSubCheckRaw.includes('โฮมรูม')) ||
+                            (sSubCheckRaw.includes('โฮมรูม') && !sPerCheckList.includes('0'))
+                        ) {
+                            return; 
+                        }
+
+                        const sSubCheck = sSubCheckRaw.replace(/[^ก-๙a-zA-Z0-9]/g, '').toUpperCase();
+                        
+                        // 💡 ล็อคเป้าให้เป็น Homeroom (หน้าเสาธง/โฮมรูม) เฉพาะคาบ 0 เท่านั้น
                         const isHomeroom = sPerCheckList.includes('0') || sSubCheckRaw.includes('หน้าเสาธง') || (sSubCheckRaw.includes('โฮมรูม') && sPerCheckList.includes('0'));
                         
                         if (reportDataType === 'homeroom' && !isHomeroom) return;
