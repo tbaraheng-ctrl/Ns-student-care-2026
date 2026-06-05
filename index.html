@@ -417,8 +417,22 @@
                             if (hasBehaviorsToDeleteFull) {
                                 const targetsToRemove = batchPayload.behaviorsToDeleteFull.filter(b => String(b.date || b['วันที่']).replace(/\//g, '-') === safeDate);
                                 if (targetsToRemove.length > 0) {
+                                    // 💡 [แก้ไขขั้นเด็ดขาด] แปลงโครงสร้าง Object ให้มีคีย์ภาษาไทยและชนิดข้อมูลตรงกับฐานข้อมูลเดิม 100% 
+                                    // เพื่อให้คำสั่ง arrayRemove ของ Firebase ค้นหาเจอและลบออกได้สำเร็จ
+                                    const mappedRemoves = targetsToRemove.map(behavior => ({
+                                        "id": Number(behavior.id || behavior['id']),
+                                        "คะแนน": Number(behavior.score || behavior['คะแนน']),
+                                        "ชั้น/ห้อง": String(behavior.room || behavior['ชั้น/ห้อง']),
+                                        "ชื่อ-สกุล": String(behavior.name || behavior['ชื่อ-สกุล']),
+                                        "ประเภทคะแนน": String(behavior.type || behavior['ประเภทคะแนน']),
+                                        "ผู้บันทึก": String(behavior.recorder || behavior['ผู้บันทึก']),
+                                        "รายการพฤติกรรม": String(behavior.behaviorName || behavior['รายการพฤติกรรม']),
+                                        "วันที่": String(behavior.date || behavior['วันที่']),
+                                        "เลขประจำตัว": Number(behavior.studentId || behavior['เลขประจำตัว'])
+                                    }));
+                                    
                                     batch.update(docRef, {
-                                        records: firebase.firestore.FieldValue.arrayRemove(...targetsToRemove)
+                                        records: firebase.firestore.FieldValue.arrayRemove(...mappedRemoves)
                                     });
                                 }
                             }
@@ -13807,89 +13821,86 @@
                         console.log("ดึงข้อมูล 'club_records' จาก Firebase ไม่สำเร็จ", e);
                     }
 
-                    // 2. ดึงข้อมูลการลงทะเบียนจาก "ชุมนุม"
-                    const res = await callGAS('getSchedules', { targetSheetId: '1NBnP7z4VWTvGCwxdgaYse-MI2x6o0Jv4aL8pTt2Ja-A', sheetName: 'ชุมนุม' });
-                    
-                    if (res.status === 'success' && res.data) {
-                        let parsedData = [];
-                        let foundClubNames = new Set();
+                    // 2. 💡 [แก้ไข] ดึงข้อมูลการลงทะเบียนจาก Firebase "clubs_data" แทน Google Sheets
+                    let parsedData = [];
+                    let foundClubNames = new Set();
 
-                        res.data.forEach((r, idx) => {
-                            if (idx === 0 && (String(r[0]).includes('รหัส') || String(r[1]).includes('รหัส'))) return;
-                            
-                            let clubName = '';
-                            let studentId = '';
-                            let rowData = {};
+                    if (window.db) {
+                        const regSnapshot = await window.db.collection('clubs_data').get();
+                        
+                        const parseClubRegRecord = (sData, docClubName, docClubCode, docRegDate, docLocation) => {
+                            const sId = String(sData.studentId || sData.code || sData['เลขประจำตัว'] || sData.id || '').replace(/[^0-9]/g, '');
+                            if (!sId) return;
 
-                            if (Array.isArray(r)) {
-                                clubName = String(r[2] || '').trim();
-                                studentId = String(r[3] || '').trim();
-                                rowData = {
-                                    studentId: studentId,    
-                                    studentName: String(r[4] || '').trim(),  
-                                    room: String(r[5] || '').trim(),         
-                                    regDate: String(r[6] || '').trim(),      
-                                    location: String(r[9] || '').trim()
-                                };
+                            const cName = docClubName || String(sData.clubName || sData['ชื่อชุมนุม'] || '').trim();
+                            if (!cName) return;
+
+                            foundClubNames.add(cName);
+
+                            const masterInfo = masterClubsMap[cName] || {
+                                activityCode: docClubCode || String(sData.activityCode || sData.clubCode || sData['รหัสกิจกรรม'] || ''),
+                                teacher: String(sData.teacher || sData.teachers || sData['ครูผู้สอน'] || ''),
+                                capacity: '-', objective: '-', equipment: '-'
+                            };
+
+                            parsedData.push({
+                                studentId: sId,
+                                studentName: String(sData.studentName || sData.name || sData['ชื่อ-สกุล'] || '').trim(),
+                                room: String(sData.room || sData['ชั้น/ห้อง'] || '').trim(),
+                                regDate: docRegDate || String(sData.regDate || sData.date || sData['วันที่ลงทะเบียน'] || '').trim(),
+                                location: docLocation || String(sData.location || sData['สถานที่เรียน'] || '').trim(),
+                                clubName: cName,
+                                activityCode: masterInfo.activityCode,
+                                teacher: masterInfo.teacher,
+                                capacity: masterInfo.capacity,
+                                objective: masterInfo.objective,
+                                equipment: masterInfo.equipment
+                            });
+                        };
+
+                        regSnapshot.forEach(doc => {
+                            const data = doc.data();
+                            const dClubName = String(data.clubName || data['ชื่อชุมนุม'] || '').trim();
+                            const dClubCode = String(data.activityCode || data.clubCode || data['รหัสกิจกรรม'] || '').trim();
+                            const dRegDate = String(data.regDate || data.date || data['วันที่ลงทะเบียน'] || '').trim();
+                            const dLoc = String(data.location || data['สถานที่เรียน'] || '').trim();
+
+                            // รองรับรูปแบบการเก็บข้อมูลแบบมี Array ย่อย
+                            if (data.students && Array.isArray(data.students)) {
+                                data.students.forEach(s => parseClubRegRecord(s, dClubName, dClubCode, dRegDate, dLoc));
+                            } else if (data.records && Array.isArray(data.records)) {
+                                data.records.forEach(s => parseClubRegRecord(s, dClubName, dClubCode, dRegDate, dLoc));
+                            } else if (data['นักเรียน'] && Array.isArray(data['นักเรียน'])) {
+                                data['นักเรียน'].forEach(s => parseClubRegRecord(s, dClubName, dClubCode, dRegDate, dLoc));
                             } else {
-                                clubName = String(r.clubName || r['ชื่อชุมนุม'] || '').trim();
-                                studentId = String(r.studentId || r['เลขประจำตัว'] || '').trim();
-                                rowData = {
-                                    studentId: studentId,
-                                    studentName: r.studentName || r['ชื่อ-สกุล'] || '',
-                                    room: r.room || r['ชั้น/ห้อง'] || '',
-                                    regDate: r.regDate || r['วันที่ลงทะเบียน'] || '',
-                                    location: r.location || r['สถานที่เรียน'] || ''
-                                };
-                            }
-                            
-                            if (clubName && studentId) {
-                                foundClubNames.add(clubName);
-
-                                // นำข้อมูลจาก Master (รายการชุมนุม) มาเติมทับ เพื่อให้ข้อมูลเป็นมาตรฐานเดียวกัน
-                                const masterInfo = masterClubsMap[clubName] || {
-                                    activityCode: Array.isArray(r) ? String(r[1]||'') : (r.activityCode||''),
-                                    teacher: Array.isArray(r) ? String(r[7]||'') : (r.teacher||''),
-                                    capacity: '-',
-                                    objective: '-',
-                                    equipment: '-'
-                                };
-
-                                parsedData.push({
-                                    ...rowData,
-                                    clubName: clubName,
-                                    activityCode: masterInfo.activityCode,
-                                    teacher: masterInfo.teacher,
-                                    capacity: masterInfo.capacity,
-                                    objective: masterInfo.objective,
-                                    equipment: masterInfo.equipment
-                                });
+                                // รองรับรูปแบบ 1 Document ต่อ 1 คน
+                                parseClubRegRecord(data, dClubName, dClubCode, dRegDate, dLoc);
                             }
                         });
-
-                        // 3. เติมชุมนุมที่ยังไม่มีคนลงทะเบียนให้แสดงในตาราง "กิจกรรมชุมนุมที่เปิด" อย่างครบถ้วน
-                        openClubsList.forEach(master => {
-                            if (!foundClubNames.has(master.clubName)) {
-                                parsedData.push({
-                                    activityCode: master.activityCode,
-                                    clubName: master.clubName,
-                                    studentId: '',
-                                    studentName: '',
-                                    room: '',
-                                    regDate: '',
-                                    teacher: master.teacher,
-                                    location: '',
-                                    objective: master.objective,
-                                    equipment: master.equipment,
-                                    capacity: master.capacity
-                                });
-                            }
-                        });
-
-                        setClubRecords(parsedData);
                     } else {
-                        alert("ดึงข้อมูลการลงทะเบียนชุมนุมล้มเหลว");
+                         throw new Error("Firebase ไม่พร้อมใช้งาน");
                     }
+
+                    // 3. เติมชุมนุมที่ยังไม่มีคนลงทะเบียนให้แสดงในตาราง "กิจกรรมชุมนุมที่เปิด" อย่างครบถ้วน
+                    openClubsList.forEach(master => {
+                        if (!foundClubNames.has(master.clubName)) {
+                            parsedData.push({
+                                activityCode: master.activityCode,
+                                clubName: master.clubName,
+                                studentId: '',
+                                studentName: '',
+                                room: '',
+                                regDate: '',
+                                teacher: master.teacher,
+                                location: '',
+                                objective: master.objective,
+                                equipment: master.equipment,
+                                capacity: master.capacity
+                            });
+                        }
+                    });
+
+                    setClubRecords(parsedData);
                 } catch (error) {
                     console.error("Failed to fetch club data:", error);
                     alert("เกิดข้อผิดพลาดในการดึงข้อมูลชุมนุม กรุณาลองใหม่อีกครั้ง");
