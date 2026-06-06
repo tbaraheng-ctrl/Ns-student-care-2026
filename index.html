@@ -375,14 +375,8 @@
                                 const docId = `${safeDate}_p${attData.period}_${safeRoom}_${attData.subjectCode}`;
                                 const docRef = window.db.collection("attendance_records").doc(docId);
                                 
-                                const studentsMap = {};
-                                attData.records.forEach(rec => {
-                                    studentsMap[rec.studentId] = {
-                                        studentName: String(rec.studentName),
-                                        status: String(rec.status)
-                                    };
-                                });
-
+                                // 💡 [แก้ไขระบบบันทึกประหยัดโควต้า] ใช้เทคนิค Dot Notation ในการอัปเดตเฉพาะคนที่แก้ไข ไม่เซฟทั้งห้อง
+                                // 1. Set ค่าเริ่มต้นและข้อมูลพื้นฐานเผื่อในกรณีที่เป็นคาบที่ยังไม่เคยมีเอกสารมาก่อนเลย 
                                 batch.set(docRef, {
                                     date: String(attData.date),
                                     period: String(attData.period),
@@ -390,9 +384,19 @@
                                     subjectName: String(attData.subjectName),
                                     room: String(attData.room),
                                     teacherName: String(attData.teacherName),
-                                    timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-                                    records: studentsMap 
+                                    timestamp: firebase.firestore.FieldValue.serverTimestamp()
                                 }, { merge: true });
+
+                                // 2. Update เฉพาะฟิลด์สถานะของนักเรียนคนที่แก้ไขจริงๆ เท่านั้น เพื่อประหยัด Bandwidth และ Write Quota
+                                const updateFields = {};
+                                attData.records.forEach(rec => {
+                                    updateFields[`records.${rec.studentId}.studentName`] = String(rec.studentName);
+                                    updateFields[`records.${rec.studentId}.status`] = String(rec.status);
+                                });
+                                
+                                if (Object.keys(updateFields).length > 0) {
+                                    batch.update(docRef, updateFields);
+                                }
                             }
                         });
                     }
@@ -9109,6 +9113,7 @@
             const [savePopup, setSavePopup] = useState(null); 
             const [attendanceCache, setAttendanceCache] = useState({}); 
             const [refreshTrigger, setRefreshTrigger] = useState(0); 
+            const forceFetchRef = useRef(false); // 💡 [แก้ไข] เพิ่มการประกาศตัวแปรนี้กลับเข้ามาเพื่อแก้ Error
 
             // --- State สำหรับรายงาน Admin ---
             const [showAdminReport, setShowAdminReport] = useState(false);
@@ -9677,54 +9682,75 @@
                 loadMySchedule();
             }, [user, allSchedules, students, globalClubRecords, globalClubsData]);
 
+            // 💡 [แก้ไข] เพิ่ม Ref สำหรับจำค่าคาบเรียนที่ระบบประมวลผลได้ล่าสุด เพื่อให้เปลี่ยนคาบอัตโนมัติแบบเรียลไทม์ (โดยไม่กวนการเลือกด้วยมือของครู)
+            const autoCalculatedPeriodRef = useRef('');
+
             useEffect(() => {
                 if (!periodSettings || periodSettings.length === 0) return;
                 
-                const currentHour = new Date().getHours();
-                const currentMin = new Date().getMinutes();
-                const currentTime = `${String(currentHour).padStart(2, '0')}:${String(currentMin).padStart(2, '0')}`;
-                
-                let foundPeriodByTime = '';
-                for (const p of periodSettings) {
-                    if (currentTime >= p.start && currentTime <= p.end) {
-                        foundPeriodByTime = String(p.period);
-                        break;
+                const calculateAndSetPeriod = () => {
+                    const currentHour = new Date().getHours();
+                    const currentMin = new Date().getMinutes();
+                    const currentTime = `${String(currentHour).padStart(2, '0')}:${String(currentMin).padStart(2, '0')}`;
+                    
+                    let foundPeriodByTime = '';
+                    for (const p of periodSettings) {
+                        if (currentTime >= p.start && currentTime <= p.end) {
+                            foundPeriodByTime = String(p.period);
+                            break;
+                        }
                     }
-                }
 
-                const dayName = getDayNameTH(currentDate);
-                const todaySchedules = teacherSchedules.filter(s => String(s.day).trim() === dayName);
+                    const dayName = getDayNameTH(currentDate);
+                    const todaySchedules = teacherSchedules.filter(s => String(s.day).trim() === dayName);
 
-                if (todaySchedules.length > 0) {
-                    const teachingNow = todaySchedules.find(s => String(s.period).trim() === foundPeriodByTime);
-                    if (teachingNow) {
-                        setCurrentPeriod(foundPeriodByTime);
-                    } else {
-                        let nextPeriod = '';
-                        const sortedToday = [...todaySchedules].sort((a, b) => {
-                            const pA = periodSettings.find(p => String(p.period) === String(a.period));
-                            const pB = periodSettings.find(p => String(p.period) === String(b.period));
-                            return ((pA && pA.start) || "").localeCompare((pB && pB.start) || "");
-                        });
+                    let expectedPeriod = '';
 
-                        for (const s of sortedToday) {
-                            const pSetting = periodSettings.find(p => String(p.period) === String(s.period));
-                            if (pSetting && pSetting.start > currentTime) {
-                                nextPeriod = String(s.period);
-                                break;
+                    if (todaySchedules.length > 0) {
+                        const teachingNow = todaySchedules.find(s => String(s.period).trim() === foundPeriodByTime);
+                        if (teachingNow) {
+                            expectedPeriod = foundPeriodByTime;
+                        } else {
+                            let nextPeriod = '';
+                            const sortedToday = [...todaySchedules].sort((a, b) => {
+                                const pA = periodSettings.find(p => String(p.period) === String(a.period));
+                                const pB = periodSettings.find(p => String(p.period) === String(b.period));
+                                return ((pA && pA.start) || "").localeCompare((pB && pB.start) || "");
+                            });
+
+                            for (const s of sortedToday) {
+                                const pSetting = periodSettings.find(p => String(p.period) === String(s.period));
+                                if (pSetting && pSetting.start > currentTime) {
+                                    nextPeriod = String(s.period);
+                                    break;
+                                }
+                            }
+                            
+                            if (nextPeriod) {
+                                expectedPeriod = nextPeriod;
+                            } else {
+                                expectedPeriod = String(sortedToday[0].period);
                             }
                         }
-                        
-                        if (nextPeriod) {
-                            setCurrentPeriod(nextPeriod);
-                        } else {
-                            setCurrentPeriod(String(sortedToday[0].period));
-                        }
+                    } else {
+                        if (foundPeriodByTime) expectedPeriod = foundPeriodByTime;
+                        else expectedPeriod = String(periodSettings[0].period); 
                     }
-                } else {
-                    if (foundPeriodByTime) setCurrentPeriod(foundPeriodByTime);
-                    else setCurrentPeriod(String(periodSettings[0].period)); 
-                }
+
+                    // 💡 ถ้าระบบตรวจสอบพบว่า "เวลาเปลี่ยนไปจนเข้าสู่คาบใหม่" ให้ทำการเปลี่ยนคาบใน Dropdown อัตโนมัติแบบเรียลไทม์
+                    if (expectedPeriod !== autoCalculatedPeriodRef.current) {
+                        autoCalculatedPeriodRef.current = expectedPeriod;
+                        setCurrentPeriod(expectedPeriod);
+                    }
+                };
+
+                // เรียกคำนวณทันที 1 ครั้งเมื่อเปิดหน้าต่าง
+                calculateAndSetPeriod();
+
+                // ตั้งเวลาตรวจสอบเวลาปัจจุบันทุกๆ 15 วินาที เพื่อสลับคาบอัตโนมัติทันทีที่หมดเวลาคาบ
+                const intervalId = setInterval(calculateAndSetPeriod, 15000);
+
+                return () => clearInterval(intervalId);
             }, [periodSettings, teacherSchedules, currentDate]);
 
             useEffect(() => {
@@ -10065,16 +10091,19 @@
                         // 🚀 [Auto-Correction เบื้องหลัง] แอบดึงข้อมูลล่าสุด เพื่อป้องกันครูเช็คขาดทับใบลาที่เพิ่งแจ้งเข้ามา (ไม่บล็อคหน้าจอ)
                         (async () => {
                             try {
+                                const isForce = forceFetchRef.current;
                                 // 💡 [แก้ไขสาเหตุหลักเรื่องโควต้า] นำ fetchLeaveRequestsFromFirebase() ออก เพราะดึงข้อมูลมาเปลืองโควต้า 
                                 // ระบบจะใช้ leaveRecords จาก Global State ที่ถูกโหลดมาแล้ว 1 ครั้งแทน
                                 const [attRes] = await Promise.allSettled([
-                                    // 💡 ดึงประวัติการเช็คชื่อจาก Firebase
-                                    !attendanceCache[cacheKey] ? fetchAttendanceHistoryFromFirebase({
+                                    // 💡 ดึงประวัติการเช็คชื่อจาก Firebase (ทะลุแคชถ้ากดปุ่มอัปเดต)
+                                    (!attendanceCache[cacheKey] || isForce) ? fetchAttendanceHistoryFromFirebase({
                                         date: targetDateTH,
                                         room: matchedSchedule.room,
                                         subjectCode: matchedSchedule.subjectCode
-                                    }) : Promise.resolve({ status: 'success', data: attendanceCache[cacheKey], isCached: true })
+                                    }, isForce) : Promise.resolve({ status: 'success', data: attendanceCache[cacheKey], isCached: true })
                                 ]);
+                                
+                                forceFetchRef.current = false; // 💡 รีเซ็ตสถานะบังคับดึงข้อมูลกลับเป็นปกติ
 
                                 let liveLeaveRecords = leaveRecords; // 💡 ใช้ Global State โดยตรง ไม่โหลดใหม่ให้เปลืองโควต้า
 
@@ -10566,9 +10595,15 @@
 
                     setIsEditMode(true); 
 
-                    // 🚀 [ปรับปรุงความเร็ว 100 เท่า]: แสดงผลสำเร็จทันทีและปลดล็อคหน้าจอ (Optimistic UI)
-                    // ระบบจะไม่ถูกแช่แข็งรอ Google Sheets อีกต่อไป
-                    let alertMsg = activePeriods.length > 1 ? `จำนวน ${activePeriods.length} คาบติดต่อกัน\nระบบได้เริ่มบันทึกข้อมูลเรียบร้อยแล้ว!` : 'บันทึกข้อมูลของวิชานี้เรียบร้อยแล้ว!';
+                    // 🚀 [แก้ไขล่าสุด]: แสดงผลป๊อปอัพให้สอดคล้องกับสถานะ "แก้ไข" หรือ "บันทึกใหม่"
+                    let alertMsg = '';
+                    if (isEditMode) {
+                        alertMsg = `ปรับปรุงแก้ไขสถานะของนักเรียนจำนวน ${changedRecordsToSave.length} คน เรียบร้อยแล้ว`;
+                        if (activePeriods.length > 1) alertMsg += `\n(อัปเดตต่อเนื่อง ${activePeriods.length} คาบ)`;
+                    } else {
+                        alertMsg = activePeriods.length > 1 ? `จำนวน ${activePeriods.length} คาบติดต่อกัน\nระบบได้เริ่มบันทึกข้อมูลเรียบร้อยแล้ว!` : 'บันทึกข้อมูลของวิชานี้เรียบร้อยแล้ว!';
+                    }
+                    
                     if (skipAddedCount > 0) alertMsg += `\n* หักคะแนนหนีเรียนสะสม ${skipAddedCount} คน`;
                     if (absentAddedCount > 0) alertMsg += `\n* หักคะแนนขาดเรียนสะสม ${absentAddedCount} คน`;
                     if (lateAddedCount > 0) alertMsg += `\n* หักคะแนนสายสะสม ${lateAddedCount} คน`;
@@ -10577,7 +10612,7 @@
 
                     setSavePopup({ 
                         type: 'success', 
-                        title: 'บันทึกข้อมูลสำเร็จ!', 
+                        title: isEditMode ? 'บันทึกการแก้ไขสำเร็จ!' : 'บันทึกข้อมูลสำเร็จ!', 
                         message: alertMsg 
                     });
                     setTimeout(() => setSavePopup(null), 3000);
@@ -10850,7 +10885,36 @@
                                 }
                             }
 
-                            if (isChecked) { checkedClasses.push(clsData); } else { uncheckedClasses.push(clsData); }
+                            // 💡 [แก้ไข] ฟังก์ชันรวมคาบเรียนที่ซ้ำกัน (วิชาเดียวกัน ห้องเดียวกัน ครูคนเดียวกัน) ไม่ให้แสดงซ้ำซ้อนในรายงาน
+                            const mergeClassData = (arr, newData) => {
+                                const existing = arr.find(c => 
+                                    c.subjectCode === newData.subjectCode && 
+                                    c.room === newData.room && 
+                                    c.teacherName === newData.teacherName
+                                );
+                                if (existing) {
+                                    // หากเจอวิชาเดิม ให้เอาคาบมารวมกันและจัดเรียง (เช่น คาบ 3, 4)
+                                    const existingPeriods = String(existing.period).split(',').map(p => p.trim());
+                                    const newPeriods = String(newData.period).split(',').map(p => p.trim());
+                                    const combinedPeriods = [...new Set([...existingPeriods, ...newPeriods])].filter(Boolean);
+                                    
+                                    combinedPeriods.sort((a, b) => {
+                                        const numA = parseInt(String(a).replace(/[^0-9]/g, '')) || 0;
+                                        const numB = parseInt(String(b).replace(/[^0-9]/g, '')) || 0;
+                                        return numA - numB;
+                                    });
+                                    
+                                    existing.period = combinedPeriods.join(', ');
+                                } else {
+                                    arr.push(newData);
+                                }
+                            };
+
+                            if (isChecked) { 
+                                mergeClassData(checkedClasses, clsData); 
+                            } else { 
+                                mergeClassData(uncheckedClasses, clsData); 
+                            }
                         }
                     });
 
@@ -11098,10 +11162,10 @@
                                 {/* 💡 เพิ่มปุ่มอัปเดตข้อมูล พร้อมแสดงสถานะกำลังอัปเดท */}
                                 <button
                                     onClick={() => {
-                                        setIsFetchingAttendance(true); // แสดงสถานะโหลดทันที
-                                        setAttendanceCache({}); // ล้างแคชเพื่อให้ดึงใหม่
-                                        setRefreshTrigger(prev => prev + 1); // กระตุ้น useEffect ให้อัปเดตเฉพาะหน้านี้
-                                        // นำคำสั่งดึงข้อมูลทั้งระบบ (onRefresh) ออก เพื่อไม่อัปเดตข้อมูลอื่นๆ ที่ไม่เกี่ยวข้อง
+                                        setIsFetchingAttendance(true); 
+                                        setAttendanceCache({}); 
+                                        forceFetchRef.current = true; // 💡 สั่งบังคับให้ดึงใหม่จาก Firebase โดยตรง (ทะลุ Cache)
+                                        setRefreshTrigger(prev => prev + 1); 
                                     }}
                                     disabled={isFetchingAttendance || isLoadingSchedule || isSyncing}
                                     className="flex-1 md:flex-none justify-center bg-teal-600 hover:bg-teal-700 text-white px-3 md:px-4 py-2 rounded-lg font-bold shadow-sm transition flex items-center text-xs md:text-base disabled:opacity-70 disabled:cursor-not-allowed"
