@@ -474,32 +474,37 @@
         };
 
        // 🚀 [แก้ไข] อัปเกรดฟังก์ชันดึงประวัติเช็คชื่อ ใส่ระบบ Cache ป้องกันโควต้ารั่วไหลจากการเปลี่ยนหน้าไปมา
-        const fetchAttendanceHistoryFromFirebase = async (payload) => {
+        const fetchAttendanceHistoryFromFirebase = async (payload, forceRefresh = false) => {
             try {
                 if (!window.db) return { status: 'error', message: 'Firebase ไม่พร้อมใช้งาน' };
                 
-                const { date, room, subjectCode } = payload; 
+                const { date, room, subjectCode } = payload || {}; 
                 const cacheKey = `fb_att_cache_${date}_${room}_${subjectCode}`;
                 const timeKey = `fb_att_time_${date}_${room}_${subjectCode}`;
                 
-                // 💡 เช็ค Cache 5 นาทีก่อนยิง Firebase 
-                const cachedStr = localStorage.getItem(cacheKey);
-                const cachedTime = localStorage.getItem(timeKey);
-                if (cachedStr && cachedTime && (Date.now() - parseInt(cachedTime)) < 5 * 60 * 1000) { 
-                    try { return { status: 'success', data: JSON.parse(cachedStr), isCached: true }; } catch(e) {}
+                if (!forceRefresh) {
+                    const cachedStr = localStorage.getItem(cacheKey);
+                    const cachedTime = localStorage.getItem(timeKey);
+                    if (cachedStr && cachedTime && (Date.now() - parseInt(cachedTime)) < 5 * 60 * 1000) { 
+                        try { return { status: 'success', data: JSON.parse(cachedStr), isCached: true }; } catch(e) {}
+                    }
                 }
 
+                // 💡 [แก้ไขปัญหาดึงข้อมูลผิดตาราง] ล็อกเป้าไปที่ "attendance_records" เพื่อดึงข้อมูลเช็คชื่อรายวิชาโดยตรง
                 let query = window.db.collection('attendance_records');
-                
                 if (date && date !== 'ALL') query = query.where('date', '==', date);
-                if (room && room !== 'ALL') query = query.where('room', '==', room);
-                if (subjectCode && subjectCode !== 'ALL') query = query.where('subjectCode', '==', subjectCode);
 
                 const snapshot = await query.get();
+
                 let recordsArray = [];
 
                 snapshot.forEach(doc => {
                     const data = doc.data();
+                    
+                    // 💡 [กรองข้อมูลในหน่วยความจำ] คัดเฉพาะรายวิชาและห้องที่ต้องการ
+                    if (room && room !== 'ALL' && String(data.room).trim() !== String(room).trim()) return;
+                    if (subjectCode && subjectCode !== 'ALL' && String(data.subjectCode).trim() !== String(subjectCode).trim()) return;
+
                     if (data.records && typeof data.records === 'object') {
                         Object.keys(data.records).forEach(studentId => {
                             recordsArray.push({
@@ -16753,29 +16758,28 @@
             const [editingRecord, setEditingRecord] = useState(null);
             const [deletingRecordId, setDeletingRecordId] = useState(null);
 
-            // 💡 1. ใช้ onSnapshot เพื่อดึงข้อมูลแบบ Real-time ตลอดเวลา รับประกันว่าข้อมูลต้องขึ้น 100%
+            // 💡 [แก้ไขปัญหาโควต้าเต็มสูบจาก Background Sync] เปลี่ยนจาก onSnapshot มาใช้ .get() ดึงครั้งเดียว
             useEffect(() => {
                 if (!window.db) {
                     console.error("Firebase ไม่พร้อมใช้งาน");
                     return;
                 }
                 
-                setIsLoading(true);
+                let isMounted = true;
                 
-                // ใช้ onSnapshot จะคอยจับตาดูการเปลี่ยนแปลงใน Firebase ตลอดเวลา
-                const unsubscribe = window.db.collection('club_records').onSnapshot(async (snapshot) => {
-                    const fetchedClubs = [];
-                    snapshot.forEach(doc => {
-                        fetchedClubs.push({ id: doc.id, ...doc.data() });
-                    });
-                    
-                    console.log(`[Firebase] โหลดรายการชุมนุมสำเร็จ: ${fetchedClubs.length} รายการ`);
-                    
-                    // 🚀 [เพิ่มระบบซิงค์อัตโนมัติ] หากใน Firebase ยังไม่มีข้อมูล (0 รายการ) ให้ไปดึงข้อมูลเก่าจาก Google Sheets มาใส่ให้โดยอัตโนมัติ
-                    if (fetchedClubs.length === 0) {
-                        try {
+                const fetchClubsData = async () => {
+                    setIsLoading(true);
+                    try {
+                        const snapshot = await window.db.collection('club_records').get();
+                        const fetchedClubs = [];
+                        snapshot.forEach(doc => {
+                            fetchedClubs.push({ id: doc.id, ...doc.data() });
+                        });
+                        
+                        console.log(`[Firebase] โหลดรายการชุมนุมสำเร็จ: ${fetchedClubs.length} รายการ`);
+                        
+                        if (fetchedClubs.length === 0) {
                             console.log("Firebase ว่างเปล่า กำลังตรวจสอบข้อมูลเก่าใน Google Sheets...");
-                            // เรียกดึงข้อมูลเก่าจาก Sheet
                             const res = await callGAS('getClubs', { targetSheetId: '1MhcJlaASLVPzPNb3u1JUoVOIW381b2CD41VdoSAUj48' });
                             
                             if (res && res.status === 'success' && res.data && res.data.length > 0) {
@@ -16783,7 +16787,6 @@
                                 const batch = window.db.batch();
                                 
                                 res.data.forEach(club => {
-                                    // โอนย้ายข้อมูลลง Firebase
                                     const docRef = window.db.collection('club_records').doc(String(club.id || Date.now() + Math.random()));
                                     batch.set(docRef, {
                                         ...club,
@@ -16792,26 +16795,36 @@
                                 });
                                 
                                 await batch.commit();
-                                console.log("ซิงค์ข้อมูลชุมนุมจาก Sheets สู่ Firebase สำเร็จ! (ระบบจะโหลดข้อมูลรอบใหม่ให้เอง)");
-                                return; // ออกจากฟังก์ชันก่อน ให้ onSnapshot ทำงานโหลดข้อมูลรอบใหม่ขึ้นหน้าจอให้เอง
+                                console.log("ซิงค์ข้อมูลชุมนุมจาก Sheets สู่ Firebase สำเร็จ!");
+                                
+                                const newSnap = await window.db.collection('club_records').get();
+                                const newFetchedClubs = [];
+                                newSnap.forEach(doc => { newFetchedClubs.push({ id: doc.id, ...doc.data() }); });
+                                
+                                newFetchedClubs.sort((a, b) => String(a.clubCode).localeCompare(String(b.clubCode)));
+                                if(isMounted) {
+                                    setClubs(newFetchedClubs);
+                                    generateNextCode(newFetchedClubs);
+                                }
+                            } else {
+                                if(isMounted) generateNextCode([]);
                             }
-                        } catch (err) {
-                            console.error("เกิดข้อผิดพลาดระหว่างย้ายข้อมูลชุมนุม:", err);
+                        } else {
+                            fetchedClubs.sort((a, b) => String(a.clubCode).localeCompare(String(b.clubCode)));
+                            if(isMounted) {
+                                setClubs(fetchedClubs);
+                                generateNextCode(fetchedClubs);
+                            }
                         }
+                    } catch (error) {
+                        console.error("Fetch clubs error:", error);
                     }
+                    if(isMounted) setIsLoading(false);
+                };
+                
+                fetchClubsData();
 
-                    // เรียงข้อมูลตามรหัสกิจกรรม
-                    fetchedClubs.sort((a, b) => String(a.clubCode).localeCompare(String(b.clubCode)));
-                    setClubs(fetchedClubs);
-                    generateNextCode(fetchedClubs);
-                    setIsLoading(false);
-                }, (error) => {
-                    console.error("Fetch clubs snapshot error:", error);
-                    setIsLoading(false);
-                });
-
-                // ยกเลิกการติดตามเมื่อปิดหน้านี้
-                return () => unsubscribe();
+                return () => { isMounted = false; };
             // eslint-disable-next-line react-hooks/exhaustive-deps
             }, []);
 
@@ -16881,7 +16894,11 @@
                         timestamp: firebase.firestore.FieldValue.serverTimestamp()
                     });
 
-                    // 💡 นำคำสั่ง setClubs ออกไป เพราะ onSnapshot จะดึงข้อมูลมาแสดงให้อัตโนมัติเมื่อบันทึกเสร็จ
+                    // 💡 [แก้ไข] อัปเดตข้อมูลเข้าสู่ State ทันที โดยไม่ต้องรอ onSnapshot
+                    const updatedClubs = [...clubs, newRecord].sort((a, b) => String(a.clubCode).localeCompare(String(b.clubCode)));
+                    setClubs(updatedClubs);
+                    generateNextCode(updatedClubs);
+                    
                     alert(`บันทึกข้อมูลสำเร็จ\n(รหัสกิจกรรมชุมนุม: ${finalClubCode})`);
                     
                     setFormData({ id: '', clubCode: '', clubName: '', capacity: '', objective: '', location: '', equipment: '' });
@@ -16904,7 +16921,8 @@
                         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
                     });
 
-                    // 💡 onSnapshot จะดึงข้อมูลที่แก้ไขใหม่มาแสดงผลอัตโนมัติ
+                    // 💡 [แก้ไข] อัปเดตข้อมูลเข้าสู่ State ทันที โดยไม่ต้องรอ onSnapshot
+                    setClubs(clubs.map(c => String(c.id) === String(editingRecord.id) ? editingRecord : c));
                     setEditingRecord(null);
                     alert('แก้ไขข้อมูลสำเร็จ');
                 } catch (err) {
@@ -16921,7 +16939,8 @@
                     
                     await window.db.collection('club_records').doc(String(deletingRecordId)).delete();
                     
-                    // 💡 onSnapshot จะเตะข้อมูลที่ถูกลบออกจากตารางอัตโนมัติ
+                    // 💡 [แก้ไข] อัปเดตข้อมูลเข้าสู่ State ทันที โดยไม่ต้องรอ onSnapshot
+                    setClubs(clubs.filter(c => String(c.id) !== String(deletingRecordId)));
                     setDeletingRecordId(null);
                     alert('ลบข้อมูลสำเร็จ');
                 } catch(e) {
@@ -17519,6 +17538,9 @@
             const [showReturnScanner, setShowReturnScanner] = useState(false);
             const [searchId, setSearchId] = useState('');
 
+            // 💡 [แก้ไข] เพิ่มการประกาศ useRef ที่หายไป ป้องกันหน้าจอขอออกโรงเรียนพังเวลาเปิดทิ้งไว้
+            const processedUnreturnedRef = useRef(new Set());
+
             // อัปเดตเวลาปัจจุบันอัตโนมัติ
             const [currentTimeStr, setCurrentTimeStr] = useState('');
             const [currentDateStr, setCurrentDateStr] = useState('');
@@ -17922,8 +17944,8 @@
                     const todayTH = formatInputDateToTH(now);
                     const currentHour = now.getHours();
 
-                    // ดึงรายการ "ออกนอกโรงเรียนชั่วคราว" ที่ยังไม่ได้สแกนกลับ (actualReturnTime เป็นค่าว่าง)
-                    const unreturned = (records || []).filter(r => r.type === 'ออกนอกโรงเรียนชั่วคราว' && !r.actualReturnTime);
+                    // ดึงรายการ "ออกนอกโรงเรียนชั่วคราว" ที่ยังไม่ได้สแกนกลับ (และยังไม่เคยโดนสั่งประมวลผล)
+                    const unreturned = (records || []).filter(r => r.type === 'ออกนอกโรงเรียนชั่วคราว' && !r.actualReturnTime && !processedUnreturnedRef.current.has(r.id));
                     
                     if (unreturned.length === 0) return;
 
@@ -17931,6 +17953,8 @@
                     let updatedRecordsMap = new Map();
 
                     for (let r of unreturned) {
+                        processedUnreturnedRef.current.add(r.id); // 💡 มาร์คว่าประมวลผลแล้วทันที จะได้ไม่วนซ้ำในนาทีถัดไปแม้เน็ตจะหลุด
+                        
                         // เงื่อนไข: ถ้าเป็นข้อมูลของ "วันก่อนหน้า" หรือ เป็นของ "วันนี้แต่เวลาเกิน 16:00 น. แล้ว"
                         const isPastDate = formatDisplayDate(r.date) !== todayTH; 
                         const isPast1600Today = formatDisplayDate(r.date) === todayTH && currentHour >= 16;
