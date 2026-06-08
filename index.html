@@ -9588,40 +9588,75 @@
                                 const clubStudentsMap = new Map();
                                 
                                 const extractClubStudents = (dataArr) => {
-                                    dataArr.forEach(data => {
-                                        const firstStudentCode = (data['นักเรียน'] && data['นักเรียน'][0] && data['นักเรียน'][0]['รหัสกิจกรรม']) ? data['นักเรียน'][0]['รหัสกิจกรรม'] : '';
-                                        const docClubName = String(data['ชื่อชุมนุม'] || data.clubName || data.id || '').trim();
-                                        const docClubCode = String(data['รหัสกิจกรรม'] || data.activityCode || data.clubCode || firstStudentCode || '').trim().toUpperCase();
-                                        
-                                        const isMyClubData = myClubs.some(c => 
-                                            (c.clubName && (c.clubName === docClubName || docClubName.includes(c.clubName) || c.clubName.includes(docClubName))) ||
-                                            (c.clubCode && c.clubCode === docClubCode)
-                                        );
+                                    dataArr.forEach((data, idx) => {
+                                        // 💡 [แก้ไข] แยกการอ่านข้อมูลให้รองรับรูปแบบ Array (ที่ได้จากการโหลด CSV ด่วน)
+                                        if (Array.isArray(data)) {
+                                            if (idx === 0 && String(data[0]).includes('ลำดับ')) return; // ข้ามหัวตาราง
 
-                                        if (isMyClubData) {
-                                            const addStudent = (sData) => {
-                                                const sId = String(sData['เลขประจำตัว'] || sData.studentId || sData.id || sData.code || '').replace(/[^0-9]/g, '');
-                                                if (!sId) return;
-                                                
+                                            const docClubCode = String(data[1] || '').trim().toUpperCase();
+                                            const docClubName = String(data[2] || '').trim();
+                                            const sId = String(data[3] || '').replace(/[^0-9]/g, '');
+                                            const sName = String(data[4] || '').trim();
+                                            const roomStr = String(data[5] || '').trim();
+                                            const sOrderNo = String(data[0] || '').trim();
+
+                                            if (!sId) return;
+
+                                            const isMyClubData = myClubs.some(c => 
+                                                (c.clubName && (c.clubName === docClubName || docClubName.includes(c.clubName) || c.clubName.includes(docClubName))) ||
+                                                (c.clubCode && c.clubCode === docClubCode)
+                                            );
+
+                                            if (isMyClubData) {
                                                 const globalStu = (students || []).find(gs => String(gs.code).trim() === sId);
-                                                const roomStr = String(sData['ชั้น/ห้อง'] || sData.room || '');
-                                                const cLevel = sData.classLevel || (roomStr ? roomStr.split('/')[0].trim() : '') || (globalStu ? globalStu.classLevel : '');
+                                                const cLevel = (roomStr ? roomStr.split('/')[0].trim() : '') || (globalStu ? globalStu.classLevel : '');
                                                 let cRoom = roomStr ? (roomStr.split('/')[1] ? roomStr.split('/')[1].trim() : roomStr) : '';
                                                 if (cRoom.includes('/')) cRoom = cRoom.split('/')[1].trim(); 
                                                 if (!cRoom) cRoom = globalStu ? globalStu.room : '';
 
                                                 clubStudentsMap.set(sId, {
                                                     id: sId, code: sId,
-                                                    name: sData['ชื่อ-สกุล'] || sData.studentName || sData.name || (globalStu ? globalStu.name : 'ไม่ระบุชื่อ'),
+                                                    name: sName || (globalStu ? globalStu.name : 'ไม่ระบุชื่อ'),
                                                     classLevel: cLevel, room: cRoom,
-                                                    orderNo: sData['ลำดับ'] || sData.orderNo || sData['เลขที่'] || (globalStu ? globalStu.orderNo : '')
+                                                    orderNo: sOrderNo || (globalStu ? globalStu.orderNo : '')
                                                 });
-                                            };
+                                            }
+                                        } else {
+                                            // รองรับข้อมูลเก่าที่เป็น JSON Object
+                                            const firstStudentCode = (data['นักเรียน'] && data['นักเรียน'][0] && data['นักเรียน'][0]['รหัสกิจกรรม']) ? data['นักเรียน'][0]['รหัสกิจกรรม'] : '';
+                                            const docClubName = String(data['ชื่อชุมนุม'] || data.clubName || data.id || '').trim();
+                                            const docClubCode = String(data['รหัสกิจกรรม'] || data.activityCode || data.clubCode || firstStudentCode || '').trim().toUpperCase();
+                                            
+                                            const isMyClubData = myClubs.some(c => 
+                                                (c.clubName && (c.clubName === docClubName || docClubName.includes(c.clubName) || c.clubName.includes(docClubName))) ||
+                                                (c.clubCode && c.clubCode === docClubCode)
+                                            );
 
-                                            if (data['นักเรียน'] && Array.isArray(data['นักเรียน'])) data['นักเรียน'].forEach(addStudent);
-                                            else if (data.students && Array.isArray(data.students)) data.students.forEach(addStudent);
-                                            else if (data.records && Array.isArray(data.records)) data.records.forEach(addStudent);
-                                            else if (data.studentId || data.code || data['เลขประจำตัว']) addStudent(data);
+                                            if (isMyClubData) {
+                                                const addStudent = (sData) => {
+                                                    const sId = String(sData['เลขประจำตัว'] || sData.studentId || sData.id || sData.code || '').replace(/[^0-9]/g, '');
+                                                    if (!sId) return;
+                                                    
+                                                    const globalStu = (students || []).find(gs => String(gs.code).trim() === sId);
+                                                    const roomStr = String(sData['ชั้น/ห้อง'] || sData.room || '');
+                                                    const cLevel = sData.classLevel || (roomStr ? roomStr.split('/')[0].trim() : '') || (globalStu ? globalStu.classLevel : '');
+                                                    let cRoom = roomStr ? (roomStr.split('/')[1] ? roomStr.split('/')[1].trim() : roomStr) : '';
+                                                    if (cRoom.includes('/')) cRoom = cRoom.split('/')[1].trim(); 
+                                                    if (!cRoom) cRoom = globalStu ? globalStu.room : '';
+
+                                                    clubStudentsMap.set(sId, {
+                                                        id: sId, code: sId,
+                                                        name: sData['ชื่อ-สกุล'] || sData.studentName || sData.name || (globalStu ? globalStu.name : 'ไม่ระบุชื่อ'),
+                                                        classLevel: cLevel, room: cRoom,
+                                                        orderNo: sData['ลำดับ'] || sData.orderNo || sData['เลขที่'] || (globalStu ? globalStu.orderNo : '')
+                                                    });
+                                                };
+
+                                                if (data['นักเรียน'] && Array.isArray(data['นักเรียน'])) data['นักเรียน'].forEach(addStudent);
+                                                else if (data.students && Array.isArray(data.students)) data.students.forEach(addStudent);
+                                                else if (data.records && Array.isArray(data.records)) data.records.forEach(addStudent);
+                                                else if (data.studentId || data.code || data['เลขประจำตัว']) addStudent(data);
+                                            }
                                         }
                                     });
                                 };
